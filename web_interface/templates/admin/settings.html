@@ -1,0 +1,21 @@
+{% extends "admin/base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <p class="eyebrow">Configuration</p>
+        <h2>Settings</h2>
+        <p class="muted">Operational settings are managed via environment variables and configuration files for safety.</p>
+    </div>
+</div>
+
+<div class="card">
+    <p class="muted">
+        This page is read-only in Phase 1. Runtime settings such as database path, web host/port,
+        WebSocket host/port, and admin credentials are all configured via the server environment
+        and <code>shared.config</code>.
+    </p>
+</div>
+{% endblock %}
+
+

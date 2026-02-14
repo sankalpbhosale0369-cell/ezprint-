@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EzPrint - Upload Document</title>
+    <!-- Cropper.js for in-browser image cropping -->
+    <link rel="stylesheet" href="https://unpkg.com/cropperjs@1.5.13/dist/cropper.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v=10) }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <script src="https://unpkg.com/cropperjs@1.5.13/dist/cropper.min.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header-card">
+            <img src="{{ url_for('static', filename='images/logo.png') }}" alt="EzPrint Logo" class="header-logo">
+            <h2>{{ shop_name }}</h2>
+        </div>
+
+        <!-- Landing Page: XEROX and PRINT Cards -->
+        <div class="landing-section" id="landingSection" style="display: block;">
+            <div class="landing-cards">
+                <div class="landing-card" id="xeroxCard">
+                    <div class="card-icon-wrapper" aria-hidden="true">
+                        <img src="{{ url_for('static', filename='images/Xerox.png') }}" alt="Xerox"
+                            class="card-icon xerox-icon">
+                    </div>
+                    <h3>XEROX</h3>
+                    <p>Scan and print documents</p>
+                </div>
+                <div class="landing-card" id="printCard">
+                    <div class="card-icon-wrapper" aria-hidden="true">
+                        <img src="{{ url_for('static', filename='images/Print.png') }}" alt="Print"
+                            class="card-icon print-icon">
+                    </div>
+                    <h3>PRINT</h3>
+                    <p>Upload and print files</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- XEROX Scanner UI (hidden by default) -->
+        <div class="xerox-scanner-section" id="xeroxScannerSection" style="display: none;">
+            <!-- Native Header Overlay -->
+            <div class="scanner-native-header">
+                <button class="scanner-native-back" id="closeScannerBtn" aria-label="Go back">←</button>
+            </div>
+
+            <div class="scanner-content">
+                <!-- Camera Preview -->
+                <div class="camera-preview-container" id="cameraPreviewContainer">
+                    <video id="cameraVideo" autoplay playsinline style="display: none;"></video>
+                    <canvas id="cameraCanvas" style="display: none;"></canvas>
+                    <div class="camera-placeholder" id="cameraPlaceholder">
+                        <div class="placeholder-icon">📷</div>
+                        <p>Camera access required</p>
+                        <button class="btn btn-secondary" id="enableCameraBtn">Enable Camera</button>
+                    </div>
+                </div>
+
+                <!-- Bottom Camera Controls (Native-Style) -->
+                <div class="scanner-native-bottom" id="scannerControls" style="display: none;">
+                    <!-- Left: Thumbnail & Count -->
+                    <div class="native-thumb-preview">
+                        <div class="native-thumb-box">
+                            <div class="thumbnails-grid" id="thumbnailsGrid"></div>
+                        </div>
+                        <span class="native-badge" id="scannedPageCount">0</span>
+                    </div>
+
+                    <!-- Center: Capture Trigger -->
+                    <div class="native-capture-wrapper">
+                        <button id="captureBtn" class="native-capture-btn" aria-label="Capture"></button>
+                    </div>
+
+                    <!-- Right: Finish/Done Action -->
+                    <div class="native-done-wrapper">
+                        <button id="finishScanBtn" class="native-done-btn" aria-label="Finish Scanning">✓</button>
+                    </div>
+
+                    <!-- Hidden but kept for logic -->
+                    <button id="retakeBtn" style="display: none;"></button>
+                </div>
+
+                <!-- Hidden UI elements to preserve JS logic but out of visual flow -->
+                <div id="scannedPagesContainer" style="display: none;">
+                    <button id="addMorePagesBtn"></button>
+                </div>
+            </div>
+        </div>
+
+        <!-- XEROX Scanned Pages Review Screen (New Page) -->
+        <div class="scanned-review-section" id="scannedReviewSection" style="display: none;">
+            <div class="scanned-review-header">
+                <h3>Xerox Scans</h3>
+                <span class="scanned-review-count" id="scannedReviewCount">0 Pages</span>
+            </div>
+
+            <div class="scanned-review-list" id="scannedReviewList">
+                <!-- Scanned items will be injected here -->
+            </div>
+
+            <!-- Bottom Floating Action Bar -->
+            <div class="review-floating-bar">
+                <button class="review-fab-btn review-fab-camera" id="reviewAddMoreBtn" aria-label="Scan more pages">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                        <circle cx="12" cy="13" r="4" />
+                    </svg>
+                </button>
+                <div class="review-fab-divider"></div>
+                <button class="review-fab-btn review-fab-done" id="reviewProceedBtn" aria-label="Proceed to settings">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="cropper-modal" id="cropperModal" style="display: none;" aria-modal="false" role="dialog"
+            aria-label="Adjust scan">
+            <div class="cropper-modal-backdrop"></div>
+            <div class="cropper-modal-content">
+                <div class="cropper-body">
+                    <div class="cropper-canvas-wrap">
+                        <canvas id="cropCanvas"></canvas>
+                        <div class="crop-frame" id="cropFrame">
+                            <div class="crop-handle nw"></div>
+                            <div class="crop-handle ne"></div>
+                            <div class="crop-handle sw"></div>
+                            <div class="crop-handle se"></div>
+                        </div>
+                        <img id="cropperImage" alt="Crop Image" style="display: none;">
+                    </div>
+                    <div class="cropper-preview-wrap">
+                        <div class="cropper-preview-label">Preview</div>
+                        <div class="cropper-preview-box">
+                            <img id="cropperPreview" alt="Crop Preview"
+                                style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                        </div>
+                    </div>
+                </div>
+                <div class="cropper-toolbar">
+                    <button type="button" class="cropper-toolbar-btn cropper-btn-retake" id="cropperRecaptureBtn"
+                        aria-label="Retake photo">
+                        <span class="cropper-btn-label">Retake</span>
+                    </button>
+                    <button type="button" class="cropper-toolbar-btn cropper-btn-rotate" id="cropperRotateBtn"
+                        aria-label="Rotate image">
+                        <span class="cropper-btn-icon">⟲</span>
+                        <span class="cropper-btn-label">Rotate</span>
+                    </button>
+                    <button type="button" class="cropper-toolbar-btn cropper-btn-crop-free" id="cropperAspectBtn"
+                        aria-label="Toggle crop aspect ratio">
+                        <span class="cropper-btn-icon">□</span>
+                        <span class="cropper-btn-label">Crop free</span>
+                    </button>
+                    <!-- Primary Continue button moved to the right -->
+                    <button type="button" class="cropper-toolbar-btn cropper-btn-continue" id="cropperConfirmBtn"
+                        aria-label="Continue with cropped image">
+                        <span class="cropper-btn-label">CONTINUE</span>
+                    </button>
+
+                    <!-- Doc Name action hidden from UI but kept to preserve ID and logic as requested -->
+                    <button type="button" id="cropperDocNameBtn" style="display: none;"></button>
+                </div>
+                <!-- Hidden doc name input modal -->
+                <div class="cropper-doc-name-modal" id="cropperDocNameModal" style="display: none;">
+                    <div class="cropper-doc-name-content">
+                        <label for="cropperDocNameInput">Document Name:</label>
+                        <input type="text" id="cropperDocNameInput" placeholder="Enter document name" maxlength="100">
+                        <div class="cropper-doc-name-actions">
+                            <button type="button" class="btn btn-secondary" id="cropperDocNameCancel">Cancel</button>
+                            <button type="button" class="btn btn-primary" id="cropperDocNameSave">Save</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- XEROX Print Settings Panel (hidden by default, shown after scanning) -->
+        <div class="xerox-settings-section" id="xeroxSettingsSection" style="display: none;">
+            <button class="print-back-btn" id="xeroxSettingsBackBtn" aria-label="Go back">←</button>
+
+            <!-- Scanned Document Info -->
+            <div class="xerox-document-info" id="xeroxDocumentInfo">
+                <div class="file-info">
+                    <strong>Scanned Document:</strong> <span id="xeroxDocumentName">-</span><br>
+                    <strong>Size:</strong> <span id="xeroxDocumentSize">-</span><br>
+                    <strong>Pages:</strong> <span id="xeroxDocumentPages">0</span>
+                </div>
+            </div>
+
+            <!-- Print Settings (reuse same form structure as upload section) -->
+            <form id="xeroxSettingsForm">
+                <input type="hidden" name="shop_id" value="{{ shop_id }}">
+                <input type="hidden" name="source" value="xerox">
+
+                <div class="form-group">
+                    <label for="xeroxCopies">Number of Copies:</label>
+                    <input type="number" id="xeroxCopies" name="copies" min="1" max="10" value="1">
+                </div>
+
+                <div class="form-group">
+                    <label for="xeroxPageRange">Page Range: <span title="Enter ranges like 1-5, 7, 9-11"
+                            style="cursor: help;">❔</span></label>
+                    <input type="text" id="xeroxPageRange" name="page_range" placeholder="e.g. 1-5,7,9-11">
+                </div>
+
+                <div class="form-group">
+                    <label for="xeroxPageSize">Page Size:</label>
+                    <select id="xeroxPageSize" name="page_size">
+                        <option value="Envelope Monarch">Envelope Monarch</option>
+                        <option value="Envelope #10">Envelope #10</option>
+                        <option value="Executive">Executive</option>
+                        <option value="Letter">Letter</option>
+                        <option value="Legal">Legal</option>
+                        <option value="Tabloid">Tabloid</option>
+                        <option value="A3">A3</option>
+                        <option value="A4" selected>A4</option>
+                        <option value="B4 (JIS)">B4 (JIS)</option>
+                        <option value="B5 (JIS)">B5 (JIS)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="xeroxOrientation">Orientation:</label>
+                    <div class="orientation-select-container">
+                        <select id="xeroxOrientation" name="orientation">
+                            <option value="Portrait" selected>Portrait</option>
+                            <option value="Landscape">Landscape</option>
+                        </select>
+                        <div class="orientation-suffix-icon" id="xeroxOrientationIcon">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+                                xmlns="http://www.w3.org/2000/svg">
+                                <rect x="5" y="2" width="6" height="12" stroke="#000000" stroke-width="1.5"
+                                    fill="none" />
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="xeroxPrintSide">Print Side:</label>
+                    <select id="xeroxPrintSide" name="print_side">
+                        <option value="Single">Single</option>
+                        <option value="Double">Double</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="xeroxColorMode">Color Mode:</label>
+                    <select id="xeroxColorMode" name="color_mode">
+                        <option value="Black & White">Black & White</option>
+                        <option value="Color">Color</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="xeroxLayoutPages">Layout (Pages per Sheet):</label>
+                    <select id="xeroxLayoutPages" name="layout_pages">
+                        <option value="1">1 per sheet</option>
+                        <option value="2">2 per sheet</option>
+                        <option value="4">4 per sheet</option>
+                        <option value="6">6 per sheet</option>
+                        <option value="8">8 per sheet</option>
+                        <option value="9">9 per sheet</option>
+                        <option value="16">16 per sheet</option>
+                    </select>
+                </div>
+
+                <!-- Price Information moved above, below Print Job Details card -->
+
+                <!-- Action Buttons -->
+                <div class="button-group">
+                    <button type="button" id="xeroxPreviewBtn" class="btn btn-secondary">Preview</button>
+                    <button type="submit" id="xeroxUploadBtn" class="btn btn-primary">Print Document</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Upload Section (hidden by default, shown when PRINT is clicked) -->
+        <div class="upload-section" id="uploadSection" style="display: none;">
+            <div class="print-section-header">
+                <button class="print-back-btn" id="printBackBtn" aria-label="Go back"
+                    onclick="document.getElementById('closeScannerBtn').click()">←</button>
+            </div>
+            <form id="uploadForm" enctype="multipart/form-data">
+                <input type="hidden" name="shop_id" value="{{ shop_id }}">
+
+                <!-- File Upload -->
+                <div class="form-group">
+                    <label for="file">Select Document:</label>
+                    <div class="dropzone" id="dropzone">
+                        <div class="dropzone-inner">
+                            <div class="dropzone-icon">📄</div>
+                            <div class="dropzone-text">
+                                <strong>Drag & drop</strong> your file here<br>
+                                <span class="muted">or click to browse</span>
+                            </div>
+                        </div>
+                        <input type="file" id="file" name="file"
+                            accept=".pdf,.docx,.doc,.png,.jpg,.jpeg,.gif,.bmp,.tiff" required>
+                    </div>
+                    <div class="file-info" id="fileInfo"></div>
+                </div>
+
+
+                <!-- Print Settings -->
+                <div class="form-group">
+                    <label for="copies">Number of Copies:</label>
+                    <input type="number" id="copies" name="copies" min="1" max="10" value="1">
+                </div>
+
+                <div class="form-group">
+                    <label for="pageRange">Page Range: <span title="Enter ranges like 1-5, 7, 9-11"
+                            style="cursor: help;">❔</span></label>
+                    <input type="text" id="pageRange" name="page_range" placeholder="e.g. 1-5,7,9-11">
+                </div>
+
+                <div class="form-group">
+                    <label for="pageSize">Page Size:</label>
+                    <select id="pageSize" name="page_size">
+                        <option value="Envelope Monarch">Envelope Monarch</option>
+                        <option value="Envelope #10">Envelope #10</option>
+                        <option value="Executive">Executive</option>
+                        <option value="Letter">Letter</option>
+                        <option value="Legal">Legal</option>
+                        <option value="Tabloid">Tabloid</option>
+                        <option value="A3">A3</option>
+                        <option value="A4" selected>A4</option>
+                        <option value="B4 (JIS)">B4 (JIS)</option>
+                        <option value="B5 (JIS)">B5 (JIS)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="orientation">Orientation:</label>
+                    <div class="orientation-select-container">
+                        <select id="orientation" name="orientation">
+                            <option value="Portrait" selected>Portrait</option>
+                            <option value="Landscape">Landscape</option>
+                        </select>
+                        <div class="orientation-suffix-icon" id="orientationIcon">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+                                xmlns="http://www.w3.org/2000/svg">
+                                <rect x="5" y="2" width="6" height="12" stroke="#000000" stroke-width="1.5"
+                                    fill="none" />
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="printSide">Print Side:</label>
+                    <select id="printSide" name="print_side">
+                        <option value="Single">Single</option>
+                        <option value="Double">Double</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="colorMode">Color Mode:</label>
+                    <select id="colorMode" name="color_mode">
+                        <option value="Black & White">Black & White</option>
+                        <option value="Color">Color</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="layoutPages">Layout (Pages per Sheet):</label>
+                    <select id="layoutPages" name="layout_pages">
+                        <option value="1">1 per sheet</option>
+                        <option value="2">2 per sheet</option>
+                        <option value="4">4 per sheet</option>
+                        <option value="6">6 per sheet</option>
+                        <option value="8">8 per sheet</option>
+                        <option value="9">9 per sheet</option>
+                        <option value="16">16 per sheet</option>
+                    </select>
+                </div>
+
+                <!-- Price Information -->
+                <div class="price-info" id="uploadPriceInfo" style="display: none;">
+                    <div class="price-card">
+                        <div class="price-row">
+                            <span>Total Pages:</span>
+                            <span id="uploadTotalPages">0</span>
+                        </div>
+                        <div class="price-row">
+                            <span>Price per page:</span>
+                            <span id="uploadPricePerPage">₹0</span>
+                        </div>
+                        <div class="price-row price-total">
+                            <span>Total Amount:</span>
+                            <span id="uploadTotalAmount">₹0</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="button-group">
+                    <button type="button" id="previewBtn" class="btn btn-primary">Preview</button>
+                    <button type="submit" id="uploadBtn" class="btn btn-primary" style="display: none;">Upload &
+                        Print</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Single Preview Section (Mobile-first redesigned) -->
+        <div class="preview-section redesigned" id="previewSection" style="display: none;">
+            <div class="preview-window big-mobile">
+                <div class="preview-viewport">
+                    <img id="previewImage" src="" alt="Document Preview">
+                    <div class="preview-loading" id="previewLoading" style="display: none;">
+                        <div class="loading-spinner"></div>
+                        <span>Updating preview...</span>
+                    </div>
+                </div>
+
+                <div class="preview-toolbar">
+                    <!-- ROW 1: View Controls -->
+                    <div class="preview-view-controls">
+                        <button class="toolbar-btn" id="zoomOutBtn" title="Zoom Out">🔍-</button>
+                        <span class="zoom-text" id="zoomLevel">100%</span>
+                        <button class="toolbar-btn" id="zoomInBtn" title="Zoom In">🔍+</button>
+                        <button class="toolbar-btn right" id="rotateBtn" title="Reset / Rotate">↻</button>
+                    </div>
+
+                    <!-- ROW 2: Page Navigation Controls -->
+                    <div class="preview-pagination-controls">
+                        <button class="toolbar-btn" id="prevPageBtn" title="Previous Page"
+                            style="display: none;">◀</button>
+                        <span class="page-indicator" id="pageIndicator" style="display: none;">Page 1 of 1</span>
+                        <button class="toolbar-btn" id="nextPageBtn" title="Next Page" style="display: none;">▶</button>
+                    </div>
+                </div>
+
+                <div class="preview-file-details">
+                    <div class="row"><span>File:</span><span id="previewFilename">-</span></div>
+                    <div class="row"><span>Size:</span><span id="previewSize">-</span></div>
+                    <div class="row"><span>Pages:</span><span id="previewPages">-</span></div>
+                    <div class="row"><span>Layout:</span><span id="previewLayout">1 per sheet</span></div>
+                    <div class="row"><span>Orientation:</span><span id="previewOrientation">-</span></div>
+                    <div class="row"><span>Print Side:</span><span id="previewPrintSide">-</span></div>
+                    <div class="row"><span>Color Mode:</span><span id="previewColorMode">-</span></div>
+                    <div class="row"><span>Copies:</span><span id="previewCopies">-</span></div>
+                    <div class="row"><span>Page Range:</span><span id="previewPageRange">-</span></div>
+                </div>
+
+                <!-- Price Information in Preview -->
+                <div class="price-info" id="previewPriceInfo" style="display: none;">
+                    <div class="price-card">
+                        <div class="price-row">
+                            <span>Total Pages:</span>
+                            <span id="previewTotalPages">0</span>
+                        </div>
+                        <div class="price-row">
+                            <span>Price per page:</span>
+                            <span id="previewPricePerPage">₹0</span>
+                        </div>
+                        <div class="price-row price-total">
+                            <span>Total Amount:</span>
+                            <span id="previewTotalAmount">₹0</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="preview-actions compact">
+                    <button type="button" id="editBtn" class="btn btn-secondary">Edit Settings</button>
+                    <button type="button" id="confirmPrintBtn" class="btn btn-primary">Print Document</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status Section (Redesigned) -->
+        <div class="status-section" id="statusSection" style="display: none;">
+            <!-- Page Header (Shared UI) -->
+            <div class="header-card">
+                <img src="{{ url_for('static', filename='images/logo.png') }}" alt="EzPrint Logo" class="header-logo">
+                <h2>{{ shop_name }}</h2>
+            </div>
+
+            <div class="track-header">
+                <h2>Track Your Printing</h2>
+                <div class="header-underline"></div>
+            </div>
+
+            <!-- Job Details Panel (Wrapper for Job ID and Amount) -->
+            <div id="jobDetailsPanel" class="job-details-panel" style="display:none;">
+
+                <!-- Job ID Card -->
+                <div class="track-card job-id-card">
+                    <div class="job-id-title">JOB ID</div>
+                    <span id="jobDetailsJobId">-</span>
+                    <div class="job-estimated-time" id="jobEstimatedTime" style="display:none;">Estimated completion
+                        time: 5 minutes</div>
+
+                    <!-- Hidden elements to preserve data/IDs -->
+                    <span id="jobDetailsFilename" style="display:none;"></span>
+                    <span id="jobDetailsFilesize" style="display:none;"></span>
+                    <span id="jobDetailsPages" style="display:none;"></span>
+                    <span id="jobDetailsSettingsTags" style="display:none;"></span>
+                    <span id="singleJobMeta" style="display:none;"></span>
+                </div>
+
+                <!-- Total Amount Card -->
+                <div class="track-card amount-card">
+                    <div class="amount-content">
+                        <div class="card-label">Total Amount</div>
+                        <div class="amount-value" id="jobDetailsAmount">₹0.00</div>
+                    </div>
+                    <div class="status-badge-wrapper">
+                        <div class="status-pill" id="jobDetailsStatus">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Single Job Panel (Wrapper for Progress) -->
+            <div id="singleJobPanel" class="status-card-wrapper" style="display:none;">
+                <!-- Stepper -->
+                <div class="status-timeline" id="singleJobStepper"></div>
+
+                <!-- Hidden elements -->
+                <div class="status-progress-container" id="singleJobProgressWrap" style="display:none;">
+                    <div class="progress-bar-track">
+                        <div class="progress-fill" id="singleJobProgress" style="width:0%;"></div>
+                    </div>
+                    <div class="progress-text-right" id="singleJobProgressText">0%</div>
+                </div>
+
+                <!-- Error Message -->
+                <div class="status-error-box" id="singleJobError" style="display:none;"></div>
+
+                <span id="singleJobFile" style="display:none;"></span>
+                <span id="singleJobFileType" style="display:none;"></span>
+            </div>
+        </div>
+
+        <style>
+            /* Track Your Printing Redesign */
+            /* Header UI from Customization Page */
+            .status-section .header-card {
+                position: sticky;
+                top: 0;
+                z-index: 1000;
+                background: #F7FAFC;
+                border: none;
+                border-bottom: 1px solid #E2E8F0;
+                border-radius: 0;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+                width: 100vw;
+                margin-left: calc(50% - 100vw / 2);
+                margin-right: calc(50% - 100vw / 2);
+                padding: 10px 20px;
+                text-align: center;
+                margin-top: -24px;
+                /* Offset the status-section padding */
+                margin-bottom: 24px;
+            }
+
+            .status-section .header-logo {
+                display: block;
+                width: 100%;
+                height: 50px;
+                margin: 0 0 6px 0;
+                max-width: 100%;
+                max-height: none;
+                box-sizing: border-box;
+                padding: 2px 16px;
+                object-fit: contain;
+                object-position: center;
+                background-color: #EEF2FF;
+                border: 1px solid #E0E7FF;
+                border-radius: 12px;
+            }
+
+            .status-section .header-card h2 {
+                font-size: 18px;
+                color: #4A5568;
+                font-weight: 500;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                display: block;
+                padding: 0;
+                background-color: transparent;
+                border: none;
+                border-radius: 0;
+                margin: 0;
+            }
+
+            .status-section {
+                max-width: 480px;
+                margin: 0 auto;
+                padding: 24px 20px;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                color: #1f2937;
+                background-color: #f8fafc;
+                /* Subtle SaaS background */
+                min-height: 100vh;
+                scroll-margin-top: calc(var(--header-height, 120px) + 20px);
+            }
+
+            .track-header {
+                text-align: left;
+                margin-bottom: 32px;
+                padding-top: 12px;
+            }
+
+            .track-header h2 {
+                font-size: 24px;
+                font-weight: 800;
+                color: #0f172a;
+                margin: 0 0 12px 0;
+                letter-spacing: -0.5px;
+            }
+
+            .header-underline {
+                width: 60px;
+                /* Short accent like reference */
+                height: 4px;
+                background-color: #3b82f6;
+                /* Blue */
+                border-radius: 2px;
+            }
+
+            .track-card {
+                background: white;
+                border-radius: 16px;
+                /* Softer corners */
+                padding: 24px;
+                box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.025);
+                /* Elegant shadow */
+                margin-bottom: 24px;
+                border: 1px solid #e2e8f0;
+                /* Crisp border */
+            }
+
+            /* Job ID Card */
+            .job-id-card {
+                text-align: center;
+                padding: 40px 24px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+            }
+
+            .job-id-title {
+                font-size: 14px;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                color: #64748b;
+                font-weight: 600;
+                margin-bottom: 8px;
+            }
+
+            /* The actual ID value needs to be big */
+            #jobDetailsJobId {
+                display: block;
+                font-size: 32px;
+                font-weight: 800;
+                color: #0f172a;
+                margin: 8px 0;
+                letter-spacing: -1px;
+                order: 1;
+            }
+
+            /* Filename directly under Job ID (secondary information) */
+            #jobDetailsFilename {
+                display: block !important;
+                order: 2;
+                max-width: 100%;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-size: 13px;
+                color: #64748b;
+                font-weight: 600;
+                margin-top: 4px;
+                background-color: #f1f5f9;
+                border: none;
+                border-radius: 20px;
+                padding: 6px 12px;
+            }
+
+            .job-estimated-time {
+                order: 3;
+                font-size: 14px;
+                color: #94a3b8;
+                font-weight: 500;
+                margin-top: 4px;
+            }
+
+            /* Amount Card */
+            .amount-card {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 20px 24px;
+            }
+
+            .card-label {
+                font-size: 14px;
+                color: #64748b;
+                margin-bottom: 4px;
+            }
+
+            .amount-value {
+                font-size: 24px;
+                font-weight: 700;
+                color: #0f172a;
+            }
+
+            .status-pill {
+                padding: 6px 12px;
+                border-radius: 20px;
+                font-size: 13px;
+                font-weight: 600;
+                background-color: #f1f5f9;
+                color: #64748b;
+            }
+
+            .status-pill.is-failed {
+                background-color: #fee2e2;
+                color: #991b1b;
+            }
+
+            .status-pill.is-completed {
+                background-color: #dcfce7;
+                color: #166534;
+            }
+
+            .status-pill.is-printing {
+                background-color: #dbeafe;
+                color: #1e40af;
+            }
+
+            .status-pill.is-queue {
+                background-color: #f3f4f6;
+                color: #374151;
+            }
+
+            /* Timeline Styling */
+            .status-timeline {
+                display: flex;
+                flex-direction: column;
+                gap: 0;
+                /* Removing gap to control spacing via padding */
+                padding: 10px 0;
+            }
+
+            .timeline-step {
+                display: flex;
+                align-items: flex-start;
+                gap: 16px;
+                position: relative;
+                padding-bottom: 32px;
+                /* Space for the line */
+            }
+
+            .timeline-step:last-child {
+                padding-bottom: 0;
+            }
+
+            .step-line {
+                position: absolute;
+                left: 19px;
+                /* Center of 40px icon (approx 20px center, line width 2px) */
+                top: 40px;
+                bottom: 0;
+                width: 2px;
+                background-color: #e2e8f0;
+                z-index: 0;
+            }
+
+            .timeline-step:last-child .step-line {
+                display: none;
+            }
+
+            /* Dynamic line coloring - optional, but nice */
+            .timeline-step.completed .step-line {
+                background-color: #22c55e;
+            }
+
+            .step-icon {
+                width: 40px;
+                height: 40px;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                flex-shrink: 0;
+                font-size: 20px;
+                z-index: 1;
+                /* Above line */
+                background-color: white;
+                /* Ensure line doesn't show through transparent icon bg */
+                border: 2px solid #e2e8f0;
+                /* Default border */
+            }
+
+            .timeline-step.completed .step-icon {
+                background-color: #22c55e;
+                /* Green */
+                border-color: #22c55e;
+                color: white;
+            }
+
+            .timeline-step.current .step-icon {
+                background-color: #eff6ff;
+                /* Light blue bg */
+                border-color: #3b82f6;
+                /* Blue border */
+                color: #3b82f6;
+            }
+
+            .timeline-step.pending .step-icon {
+                background-color: #f8fafc;
+                border-color: #e2e8f0;
+                color: #94a3b8;
+            }
+
+            .step-content {
+                flex: 1;
+                padding-top: 8px;
+                /* Align with icon center roughly */
+            }
+
+            .step-title {
+                font-size: 16px;
+                font-weight: 600;
+                margin-bottom: 4px;
+            }
+
+            .timeline-step.completed .step-title {
+                color: #22c55e;
+            }
+
+            .timeline-step.current .step-title {
+                color: #3b82f6;
+            }
+
+            .timeline-step.pending .step-title {
+                color: #94a3b8;
+            }
+
+            .step-desc {
+                font-size: 14px;
+                color: #64748b;
+                line-height: 1.4;
+            }
+
+            /* Error Box */
+            .status-error-box {
+                margin-top: 20px;
+                padding: 16px;
+                background-color: #fef2f2;
+                border-radius: 8px;
+                color: #991b1b;
+                font-size: 14px;
+                border-left: 4px solid #ef4444;
+            }
+        </style>
+
+
+    </div>
+
+    <!-- PDF-lib for client-side PDF generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+    <script src="{{ url_for('static', filename='js/upload.js') }}"></script>
+</body>
+
+</html>

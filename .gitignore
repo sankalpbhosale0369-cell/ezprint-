@@ -1,0 +1,39 @@
+# Database files
+*.db
+ezprint.db
+*.sqlite3
+test.db
+
+# Logs
+logs/
+*.log
+server_err.txt
+server_log.txt
+server_out.txt
+web_interface/server_*.txt
+
+# Python
+__pycache__/
+*.pyc
+
+# Environments
+venv/
+.env
+
+# Uploads and temporary files
+uploads/
+preview_cache/
+temp/
+*.tmp
+*.py~
+*.swp
+
+# Deployment artifacts
+CLEANUP_*.md
+CLOUDINARY_*.md
+FILES_MOVED_DELETED.md
+FINAL_CLEANUP_REPORT.md
+PROJECT_STRUCTURE.md
+test_output*.txt
+test_result.txt
+test_url_results.txt

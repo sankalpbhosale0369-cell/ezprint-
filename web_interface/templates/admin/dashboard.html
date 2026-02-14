@@ -1,0 +1,478 @@
+{% extends "admin/base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <p class="eyebrow">Admin Panel</p>
+        <h2>Dashboard</h2>
+    </div>
+    <div class="chip">Live</div>
+</div>
+
+<div class="kpi-grid">
+    <div class="card kpi">
+        <div class="kpi-label">Total Shops</div>
+        <div class="kpi-value" data-kpi="total_shops">{{ metrics.total_shops }}</div>
+    </div>
+    <div class="card kpi">
+        <div class="kpi-label">Active Shops</div>
+        <div class="kpi-value" data-kpi="active_shops">{{ metrics.active_shops }}</div>
+    </div>
+    <div class="card kpi">
+        <div class="kpi-label">Inactive Shops</div>
+        <div class="kpi-value" data-kpi="inactive_shops">{{ metrics.inactive_shops }}</div>
+    </div>
+    <div class="card kpi">
+        <div class="kpi-label">Total Print Jobs</div>
+        <div class="kpi-value" data-kpi="total_jobs">{{ metrics.total_jobs }}</div>
+    </div>
+    <div class="card kpi">
+        <div class="kpi-label">Total Revenue</div>
+        <div class="kpi-value" data-kpi="total_revenue">₹{{ "%.2f"|format(metrics.total_revenue) }}</div>
+    </div>
+</div>
+
+<div class="charts-grid">
+    <div class="card chart-card">
+        <div class="card-header">
+            <div>
+                <div class="card-title">Daily Jobs</div>
+                <div class="card-subtitle">Last 30 days</div>
+            </div>
+        </div>
+        <canvas id="dailyJobsChart"></canvas>
+    </div>
+    <div class="card chart-card">
+        <div class="card-header">
+            <div>
+                <div class="card-title">Monthly Revenue</div>
+                <div class="card-subtitle">Last 12 months</div>
+            </div>
+        </div>
+        <canvas id="monthlyRevenueChart"></canvas>
+    </div>
+    <div class="card chart-card">
+        <div class="card-header">
+            <div>
+                <div class="card-title">Job Status Distribution</div>
+                <div class="card-subtitle">All time</div>
+            </div>
+        </div>
+        <canvas id="statusChart"></canvas>
+    </div>
+    <div class="card chart-card">
+        <div class="card-header">
+            <div>
+                <div class="card-title">Pricing Configuration</div>
+                <div class="card-subtitle">Custom vs Default pricing</div>
+            </div>
+        </div>
+        <canvas id="pricingChart"></canvas>
+    </div>
+</div>
+
+<script defer>
+document.addEventListener("DOMContentLoaded", () => {
+    // Start with server-rendered data; if API fetch succeeds we update in-place.
+    let charts = {{ charts|tojson }};
+    let metrics = {{ metrics|tojson }};
+
+    // KPI elements map
+    const kpiMap = {
+        total_shops: document.querySelector('[data-kpi="total_shops"]'),
+        active_shops: document.querySelector('[data-kpi="active_shops"]'),
+        inactive_shops: document.querySelector('[data-kpi="inactive_shops"]'),
+        total_jobs: document.querySelector('[data-kpi="total_jobs"]'),
+        total_revenue: document.querySelector('[data-kpi="total_revenue"]'),
+    };
+
+    // Initialize charts with current data
+    const dailyCtx = document.getElementById('dailyJobsChart');
+    const monthlyCtx = document.getElementById('monthlyRevenueChart');
+    const statusCtx = document.getElementById('statusChart');
+    const pricingCtx = document.getElementById('pricingChart');
+
+    // Create gradient for daily jobs chart
+    let dailyGradient = null;
+    if (dailyCtx) {
+        const dailyCtx2d = dailyCtx.getContext('2d');
+        dailyGradient = dailyCtx2d.createLinearGradient(0, 0, 0, 400);
+        dailyGradient.addColorStop(0, 'rgba(37, 99, 235, 0.3)');
+        dailyGradient.addColorStop(1, 'rgba(37, 99, 235, 0)');
+    }
+
+    // Create gradient for monthly revenue chart
+    let monthlyGradient = null;
+    if (monthlyCtx) {
+        const monthlyCtx2d = monthlyCtx.getContext('2d');
+        monthlyGradient = monthlyCtx2d.createLinearGradient(0, 0, 0, 400);
+        monthlyGradient.addColorStop(0, 'rgba(34, 197, 94, 0.3)');
+        monthlyGradient.addColorStop(1, 'rgba(34, 197, 94, 0)');
+    }
+
+    // Calculate y-axis max for zero-data handling (daily jobs)
+    const dailyMaxValue = charts.daily.jobs.length > 0 ? Math.max(...charts.daily.jobs) : 0;
+    const dailyYAxisMax = dailyMaxValue === 0 ? 1 : Math.max(dailyMaxValue * 1.1, 1);
+
+    // Calculate y-axis max for zero-data handling (monthly revenue)
+    const monthlyMaxValue = charts.monthly.revenue.length > 0 ? Math.max(...charts.monthly.revenue) : 0;
+    const monthlyYAxisMax = monthlyMaxValue === 0 ? 1 : Math.max(monthlyMaxValue * 1.1, 1);
+
+    const dailyChart = dailyCtx ? new Chart(dailyCtx, {
+        type: 'line',
+        data: {
+            labels: charts.daily.labels,
+            datasets: [{
+                label: 'Jobs',
+                data: charts.daily.jobs,
+                borderColor: 'rgb(37, 99, 235)',
+                backgroundColor: dailyGradient,
+                fill: true,
+                tension: 0.45,
+                borderWidth: 3,
+                borderCapStyle: 'round',
+                borderJoinStyle: 'round',
+                pointRadius: 0,
+                pointHoverRadius: 6,
+                pointBackgroundColor: 'rgb(37, 99, 235)',
+                pointBorderColor: '#ffffff',
+                pointBorderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            layout: {
+                padding: {
+                    top: 16,
+                    right: 16,
+                    bottom: 12,
+                    left: 12
+                }
+            },
+            animation: {
+                duration: 1000,
+                easing: 'easeInOutCubic'
+            },
+            interaction: {
+                intersect: false,
+                mode: 'index'
+            },
+            plugins: {
+                legend: {
+                    display: false
+                },
+                tooltip: {
+                    backgroundColor: '#ffffff',
+                    titleColor: '#6b7280',
+                    bodyColor: '#111827',
+                    borderColor: '#e5e7eb',
+                    borderWidth: 1,
+                    padding: 14,
+                    cornerRadius: 10,
+                    displayColors: false,
+                    shadowOffsetX: 0,
+                    shadowOffsetY: 4,
+                    shadowBlur: 12,
+                    shadowColor: 'rgba(0, 0, 0, 0.15)',
+                    titleFont: {
+                        family: "'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
+                        size: 11,
+                        weight: 'normal'
+                    },
+                    bodyFont: {
+                        family: "'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
+                        size: 16,
+                        weight: 'bold'
+                    },
+                    boxPadding: 6,
+                    callbacks: {
+                        title: function(context) {
+                            return context[0].label || '';
+                        },
+                        label: function(context) {
+                            const value = context.parsed.y;
+                            return value % 1 === 0 ? value.toFixed(0) : value.toFixed(2);
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: {
+                        display: false
+                    },
+                    ticks: {
+                        font: {
+                            family: "'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
+                            size: 12,
+                            weight: 'normal'
+                        },
+                        color: '#6b7280',
+                        maxRotation: 45,
+                        minRotation: 0,
+                        padding: 10
+                    },
+                    border: {
+                        display: false
+                    }
+                },
+                y: {
+                    beginAtZero: true,
+                    max: dailyYAxisMax,
+                    min: 0,
+                    grid: {
+                        display: true,
+                        color: 'rgba(229, 231, 235, 0.08)',
+                        lineWidth: 1,
+                        drawBorder: false,
+                        borderDash: [5, 5],
+                        borderDashOffset: 0
+                    },
+                    ticks: {
+                        font: {
+                            family: "'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
+                            size: 12,
+                            weight: 'normal'
+                        },
+                        color: '#6b7280',
+                        padding: 12,
+                        callback: function(value) {
+                            return value % 1 === 0 ? value : value.toFixed(1);
+                        }
+                    },
+                    border: {
+                        display: false
+                    }
+                }
+            }
+        }
+    }) : null;
+
+    const monthlyChart = monthlyCtx ? new Chart(monthlyCtx, {
+        type: 'line',
+        data: {
+            labels: charts.monthly.labels,
+            datasets: [{
+                label: 'Revenue',
+                data: charts.monthly.revenue,
+                borderColor: 'rgb(34, 197, 94)',
+                backgroundColor: monthlyGradient,
+                fill: true,
+                tension: 0.45,
+                borderWidth: 3,
+                borderCapStyle: 'round',
+                borderJoinStyle: 'round',
+                pointRadius: 0,
+                pointHoverRadius: 6,
+                pointBackgroundColor: 'rgb(34, 197, 94)',
+                pointBorderColor: '#ffffff',
+                pointBorderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            layout: {
+                padding: {
+                    top: 16,
+                    right: 16,
+                    bottom: 12,
+                    left: 12
+                }
+            },
+            animation: {
+                duration: 1000,
+                easing: 'easeInOutCubic'
+            },
+            interaction: {
+                intersect: false,
+                mode: 'index'
+            },
+            plugins: {
+                legend: {
+                    display: false
+                },
+                tooltip: {
+                    backgroundColor: '#ffffff',
+                    titleColor: '#6b7280',
+                    bodyColor: '#111827',
+                    borderColor: '#e5e7eb',
+                    borderWidth: 1,
+                    padding: 14,
+                    cornerRadius: 10,
+                    displayColors: false,
+                    shadowOffsetX: 0,
+                    shadowOffsetY: 4,
+                    shadowBlur: 12,
+                    shadowColor: 'rgba(0, 0, 0, 0.15)',
+                    titleFont: {
+                        family: "'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
+                        size: 11,
+                        weight: 'normal'
+                    },
+                    bodyFont: {
+                        family: "'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
+                        size: 16,
+                        weight: 'bold'
+                    },
+                    boxPadding: 6,
+                    callbacks: {
+                        title: function(context) {
+                            return context[0].label || '';
+                        },
+                        label: function(context) {
+                            const value = context.parsed.y;
+                            return '₹' + (value % 1 === 0 ? value.toFixed(0) : value.toFixed(2));
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: {
+                        display: false
+                    },
+                    ticks: {
+                        font: {
+                            family: "'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
+                            size: 12,
+                            weight: 'normal'
+                        },
+                        color: '#6b7280',
+                        maxRotation: 45,
+                        minRotation: 0,
+                        padding: 10
+                    },
+                    border: {
+                        display: false
+                    }
+                },
+                y: {
+                    beginAtZero: true,
+                    max: monthlyYAxisMax,
+                    min: 0,
+                    grid: {
+                        display: true,
+                        color: 'rgba(229, 231, 235, 0.08)',
+                        lineWidth: 1,
+                        drawBorder: false,
+                        borderDash: [5, 5],
+                        borderDashOffset: 0
+                    },
+                    ticks: {
+                        font: {
+                            family: "'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
+                            size: 12,
+                            weight: 'normal'
+                        },
+                        color: '#6b7280',
+                        padding: 12,
+                        callback: function(value) {
+                            return '₹' + (value % 1 === 0 ? value.toFixed(0) : value.toFixed(1));
+                        }
+                    },
+                    border: {
+                        display: false
+                    }
+                }
+            }
+        }
+    }) : null;
+
+    const statusChart = statusCtx ? new Chart(statusCtx, {
+        type: 'doughnut',
+        data: {
+            labels: charts.status_distribution.labels,
+            datasets: [{
+                data: charts.status_distribution.counts,
+                backgroundColor: ['#22c55e', '#3b82f6', '#f97316', '#ef4444', '#a855f7']
+            }]
+        },
+        options: { plugins: { legend: { position: 'bottom' } } }
+    }) : null;
+
+    const pricingChart = pricingCtx ? new Chart(pricingCtx, {
+        type: 'pie',
+        data: {
+            labels: ['Custom Pricing', 'Default Pricing'],
+            datasets: [{
+                data: [charts.pricing_split.custom_pricing, charts.pricing_split.default_pricing],
+                backgroundColor: ['#6366f1', '#e5e7eb']
+            }]
+        },
+        options: { plugins: { legend: { position: 'bottom' } } }
+    }) : null;
+
+    // Helper to refresh KPI DOM values
+    function updateKpis(newMetrics) {
+        if (!newMetrics) return;
+        Object.entries(kpiMap).forEach(([key, el]) => {
+            if (el && key in newMetrics) {
+                el.textContent = key === 'total_revenue'
+                    ? `₹${Number(newMetrics[key]).toFixed(2)}`
+                    : newMetrics[key];
+            }
+        });
+    }
+
+    // Helper to update charts with new data
+    function updateCharts(newCharts) {
+        if (!newCharts) return;
+        charts = newCharts;
+
+        if (dailyChart) {
+            dailyChart.data.labels = charts.daily.labels;
+            dailyChart.data.datasets[0].data = charts.daily.jobs;
+            // Update y-axis max for zero-data handling
+            const dailyMaxValue = charts.daily.jobs.length > 0 ? Math.max(...charts.daily.jobs) : 0;
+            const dailyYAxisMax = dailyMaxValue === 0 ? 1 : Math.max(dailyMaxValue * 1.1, 1);
+            dailyChart.options.scales.y.max = dailyYAxisMax;
+            dailyChart.update('active');
+        }
+
+        if (monthlyChart) {
+            monthlyChart.data.labels = charts.monthly.labels;
+            monthlyChart.data.datasets[0].data = charts.monthly.revenue;
+            // Update y-axis max for zero-data handling
+            const monthlyMaxValue = charts.monthly.revenue.length > 0 ? Math.max(...charts.monthly.revenue) : 0;
+            const monthlyYAxisMax = monthlyMaxValue === 0 ? 1 : Math.max(monthlyMaxValue * 1.1, 1);
+            monthlyChart.options.scales.y.max = monthlyYAxisMax;
+            monthlyChart.update('active');
+        }
+
+        if (statusChart) {
+            statusChart.data.labels = charts.status_distribution.labels;
+            statusChart.data.datasets[0].data = charts.status_distribution.counts;
+            statusChart.update();
+        }
+
+        if (pricingChart) {
+            pricingChart.data.datasets[0].data = [
+                charts.pricing_split.custom_pricing,
+                charts.pricing_split.default_pricing
+            ];
+            pricingChart.update();
+        }
+    }
+
+    // Apply initial server-rendered metrics
+    updateKpis(metrics);
+
+    // Fetch live metrics; silently ignore errors so page still loads.
+    fetch("/admin/api/metrics", { credentials: "same-origin" })
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+            if (!data || !data.metrics || !data.charts) return;
+            metrics = data.metrics;
+            charts = data.charts;
+            updateKpis(metrics);
+            updateCharts(charts);
+        })
+        .catch(() => {
+            // Keep existing values on failure
+        });
+});
+</script>
+{% endblock %}
+

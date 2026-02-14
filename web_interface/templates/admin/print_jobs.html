@@ -1,0 +1,82 @@
+{% extends "admin/base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <p class="eyebrow">Monitoring</p>
+        <h2>Print Jobs</h2>
+    </div>
+</div>
+
+<div class="card">
+    <form method="get" class="filters">
+        <div class="filter-row">
+            <div class="filter-field">
+                <label>Status</label>
+                <select name="status">
+                    <option value="">All</option>
+                    {% for s in statuses %}
+                        <option value="{{ s }}" {% if active_filters.status == s %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="filter-field">
+                <label>Shop</label>
+                <select name="shop_id">
+                    <option value="">All</option>
+                    {% for shop in all_shops %}
+                        <option value="{{ shop.shop_id }}" {% if active_filters.shop_id == shop.shop_id %}selected{% endif %}>
+                            {{ shop.shop_name }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="filter-field">
+                <label>Date From</label>
+                <input type="datetime-local" name="date_from" value="{{ active_filters.date_from }}">
+            </div>
+            <div class="filter-field">
+                <label>Date To</label>
+                <input type="datetime-local" name="date_to" value="{{ active_filters.date_to }}">
+            </div>
+            <div class="filter-actions">
+                <button type="submit" class="btn-primary">Apply</button>
+                <a href="{{ url_for('admin.jobs') }}" class="btn-link">Reset</a>
+            </div>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Job ID</th>
+                <th>File Name</th>
+                <th>Shop</th>
+                <th>Status</th>
+                <th>Amount</th>
+                <th>Created At</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for job, shop_name in jobs %}
+            <tr>
+                <td>{{ job.job_id }}</td>
+                <td>{{ job.filename }}</td>
+                <td>{{ shop_name }}</td>
+                <td>{{ job.status }}</td>
+                <td>₹{{ '%.2f'|format(job.amount or 0) }}</td>
+                <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M') if job.created_at else '-' }}</td>
+            </tr>
+        {% else %}
+            <tr>
+                <td colspan="6" class="empty">No jobs match the current filters.</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+

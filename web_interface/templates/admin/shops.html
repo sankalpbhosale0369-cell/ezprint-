@@ -1,0 +1,65 @@
+{% extends "admin/base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <p class="eyebrow">Overview</p>
+        <h2>Shops</h2>
+    </div>
+</div>
+
+<div class="card">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Shop Name</th>
+                <th>Shop ID</th>
+                <th>Created</th>
+                <th>Status</th>
+                <th>Total Jobs</th>
+                <th>Total Expected Revenue</th>
+                <th>Printers</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for shop in shops %}
+            {% set stats = job_stats.get(shop.shop_id, {}) %}
+            {% set printer_count = printer_counts.get(shop.shop_id, 0) %}
+            <tr>
+                <td>{{ shop.shop_name }}</td>
+                <td>{{ shop.shop_id }}</td>
+                <td>{{ shop.created_at.strftime('%Y-%m-%d %H:%M') if shop.created_at else '-' }}</td>
+                <td>
+                    {% if shop.is_active %}
+                        <span class="badge badge-success">Active</span>
+                    {% else %}
+                        <span class="badge badge-muted">Blocked</span>
+                    {% endif %}
+                </td>
+                <td>{{ stats.job_count or 0 }}</td>
+                <td>₹{{ '%.2f'|format(stats.revenue or 0) }}</td>
+                <td>{{ printer_count }}</td>
+                <td class="actions">
+                    {% if shop.is_active %}
+                        <form method="post" action="{{ url_for('admin.block_shop', shop_id=shop.shop_id) }}">
+                            <button type="submit" class="btn-link danger">Block</button>
+                        </form>
+                    {% else %}
+                        <form method="post" action="{{ url_for('admin.unblock_shop', shop_id=shop.shop_id) }}">
+                            <button type="submit" class="btn-link">Unblock</button>
+                        </form>
+                    {% endif %}
+                </td>
+            </tr>
+        {% else %}
+            <tr>
+                <td colspan="8" class="empty">No shops found.</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+
