@@ -27,7 +27,7 @@ from shared.global_error_handler import (
     initialize_error_handling
 )
 # Admin blueprint
-from admin import admin_bp
+from web_interface.admin import admin_bp
 
 # Import new API blueprints
 from api.auth import auth_bp
