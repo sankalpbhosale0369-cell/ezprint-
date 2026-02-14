@@ -30,11 +30,11 @@ from shared.global_error_handler import (
 from web_interface.admin import admin_bp
 
 # Import new API blueprints
-from api.auth import auth_bp
-from api.dashboard import dashboard_bp
-from api.config import config_bp
-from api.internal import internal_bp
-from utils.jwt_helper import validate_token
+from web_interface.api.auth import auth_bp
+from web_interface.api.dashboard import dashboard_bp
+from web_interface.api.config import config_bp
+from web_interface.api.internal import internal_bp
+from web_interface.utils.jwt_helper import validate_token
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
