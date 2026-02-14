@@ -1,5 +1,4 @@
 # Desktop Application Dependencies
-PyQt5==5.15.9
 qrcode==7.4.2
 Pillow==10.0.1
 websockets==11.0.3
@@ -28,20 +27,15 @@ PyMuPDF==1.23.8
 
 # Printing
 pywin32==306; sys_platform == "win32"
-pycups==1.9.74; sys_platform == "linux"
 
 # Network Printing Dependencies
 # Skip native netifaces build on Windows; we provide a pure-Python fallback module
-netifaces==0.11.0; sys_platform != "win32"  # For dynamic network range detection
 ghostscript==0.7  # For PDF to PostScript conversion
 
 # Utilities
 cryptography==41.0.4
 bcrypt==4.0.1
 PyJWT==2.8.0  # For API authentication
-
-# Desktop UI (CustomTkinter)
-customtkinter==5.2.2
 
 # Additional dependencies
 Werkzeug==2.3.7
