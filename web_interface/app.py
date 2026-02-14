@@ -798,14 +798,12 @@ if __name__ == '__main__':
     
     # Run Flask-SocketIO app with eventlet
     # Hardened for Production: host, port, debug come from cfg
-    def start_app():
+    if __name__ == "__main__":
         socketio.run(
             app,
             host="0.0.0.0",
             port=int(os.environ.get("PORT", 5000)),
-            debug=False,
-            use_reloader=False
-    )
+            debug=True
+        )
 
-safe_execute(start_app, error_context="FLASK_APP", show_dialog=False)
 
