@@ -37,3 +37,4 @@ PROJECT_STRUCTURE.md
 test_output*.txt
 test_result.txt
 test_url_results.txt
+web_interface/static/images/qr_codes/ 
