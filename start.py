@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
 
 # Add parent directory to Python path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from shopkeeper_app.main import LoginWindow
 from shared.database import init_database
@@ -99,7 +99,7 @@ def start_web_interface():
             print(f"Error: {web_interface_dir} directory not found")
             return
         os.chdir(web_interface_dir)
-        subprocess.run([sys.executable, "app.py"], check=True)
+        subprocess.run([sys.executable, "-m", "web_interface.app"], check=True,cwd=BASE_DIR)
     
     safe_execute(_start_web, error_context="WEB_INTERFACE_START", show_dialog=False)
 

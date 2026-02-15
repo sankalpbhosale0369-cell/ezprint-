@@ -14,6 +14,7 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from flask_socketio import SocketIO, emit, join_room, disconnect
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+from shared.cloudinary_helper import upload_file_to_cloudinary
 import logging
 import sys
 
@@ -186,8 +187,23 @@ def upload_file():
                 file_size = final_pdf_path.stat().st_size
                 original_filename = f"scanned_document_{int(datetime.now().timestamp() * 1000)}.pdf"
                 file_type = 'pdf'
-                file_path = str(final_pdf_path)
                 
+                # 🔥 Upload combined PDF to Cloudinary (PRODUCTION SAFE)
+                cloudinary_url, public_id = upload_file_to_cloudinary(
+                    str(final_pdf_path),
+                    safe_shop_id,
+                    original_filename
+                )
+
+                file_path = cloudinary_url
+                cloudinary_public_id = public_id
+
+                # Optional: delete local file after upload (recommended for Render)
+                try:
+                    os.remove(final_pdf_path)
+                except Exception:
+                    pass
+
             except Exception as e:
                 logger.error(f"XEROX upload error: {e}")
                 # Clean up on error

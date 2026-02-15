@@ -5,11 +5,15 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables from .env if it exists
-load_dotenv()
-
 # Base directory
-BASE_DIR = Path(__file__).parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+print("Cloudinary Cloud Name:", os.getenv("CLOUDINARY_CLOUD_NAME"))
+
+# Load .env from project root explicitly
+env_path = BASE_DIR / ".env"
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path)
 
 # Database settings
 # Use PostgreSQL in production (via DATABASE_URL env var), SQLite for local dev
