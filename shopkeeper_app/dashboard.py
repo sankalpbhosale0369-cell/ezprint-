@@ -1511,6 +1511,169 @@ class PrintJobWorker(QThread):
         else:
             self.job_failed.emit(self.job_id, message)
 
+
+class DashboardKPIWorker(QThread):
+    """Worker thread for fetching and calculating Dashboard KPIs and analytics OFF the UI thread"""
+    kpi_data_ready = pyqtSignal(dict)
+    
+    def __init__(self, shop_id, session_token, selected_month_str):
+        super().__init__()
+        self.shop_id = shop_id
+        self.session_token = session_token
+        self.selected_month_str = selected_month_str
+        
+    def run(self):
+        try:
+            logger.info(f"DashboardKPIWorker: Starting background data loading for shop {self.shop_id}")
+            
+            # API Client call logic
+            api_success = False
+            all_jobs_objs = []
+            kpis = {}
+            
+            # Use top-level ApiClient
+            api_client_local = ApiClient(session_token=self.session_token)
+            
+            success, api_data, error = api_client_local.get_dashboard(self.shop_id)
+            
+            if success and api_data:
+                logger.info("DashboardKPIWorker: Successfully fetched data from API")
+                kpis_raw = api_data.get('kpis', {})
+                jobs_list = api_data.get('jobs', [])
+                
+                # Map API KPIs to structured result
+                kpis = {
+                    'total': str(kpis_raw.get('total_jobs', 0)),
+                    'today': f"₹ {kpis_raw.get('total_revenue', 0.0):.2f}",
+                    'monthly': f"₹ {kpis_raw.get('total_revenue', 0.0):.2f}",
+                    'pending': str(kpis_raw.get('pending_jobs', 0)),
+                    'printing': str(kpis_raw.get('printing_jobs', 0)),
+                    'completed': str(kpis_raw.get('completed_jobs', 0)),
+                    'failed': str(kpis_raw.get('failed_jobs', 0))
+                }
+                
+                # Convert API jobs to simple objects
+                from types import SimpleNamespace
+                for j in jobs_list:
+                    created_at = None
+                    if j.get('created_at'):
+                        try:
+                            # Parse ISO format (handling 'Z' or '+00:00')
+                            iso_str = j['created_at'].replace('Z', '+00:00')
+                            created_at = datetime.fromisoformat(iso_str)
+                        except:
+                            pass
+                    
+                    obj = SimpleNamespace(
+                        job_id=j.get('job_id'),
+                        filename=j.get('filename'),
+                        file_path=j.get('file_path'),
+                        status=j.get('status'),
+                        amount=j.get('amount', 0.0),
+                        created_at=created_at,
+                        total_pages=j.get('total_pages'),
+                        copies=j.get('copies', 1),
+                        page_range=j.get('page_range'),
+                        page_size=j.get('page_size'),
+                        orientation=j.get('orientation'),
+                        print_side=j.get('print_side'),
+                        color_mode=j.get('color_mode'),
+                        layout_pages=j.get('layout_pages', 1)
+                    )
+                    all_jobs_objs.append(obj)
+                api_success = True
+            
+            # DB Fallback and Analytics logic
+            from shared.database import SessionLocal, PrintJob
+            import calendar
+            
+            db = SessionLocal()
+            try:
+                if not api_success:
+                    logger.info("DashboardKPIWorker: Falling back to local database for KPIs")
+                    # Fallback KPI calculation from local DB
+                    all_jobs_db = db.query(PrintJob).filter(PrintJob.shop_id == self.shop_id).all()
+                    all_jobs_objs = all_jobs_db # Use DB objects for recent jobs list
+                    
+                    total_jobs = len(all_jobs_objs)
+                    pending_statuses = {"pending", "in queue", "processing", "printing started"}
+                    printing_statuses = {"printing", "printing started"}
+                    
+                    pending_count = sum(1 for job in all_jobs_objs if (job.status or "").strip().lower() in pending_statuses)
+                    printing_count = sum(1 for job in all_jobs_objs if (job.status or "").strip().lower() in printing_statuses)
+                    completed_count = sum(1 for job in all_jobs_objs if (job.status or "").strip().lower() == "completed")
+                    failed_count = sum(1 for job in all_jobs_objs if (job.status or "").strip().lower() == "failed")
+                    
+                    now = datetime.now()
+                    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                    
+                    today_revenue = sum(job.amount or 0 for job in all_jobs_objs if job.created_at and job.created_at >= today_start)
+                    monthly_revenue = sum(job.amount or 0 for job in all_jobs_objs if job.created_at and job.created_at >= month_start)
+                    
+                    kpis = {
+                        'total': str(total_jobs),
+                        'today': f"₹ {today_revenue:.2f}",
+                        'monthly': f"₹ {monthly_revenue:.2f}",
+                        'pending': str(pending_count),
+                        'printing': str(printing_count),
+                        'completed': str(completed_count),
+                        'failed': str(failed_count)
+                    }
+                
+                # Calculate Analytics data
+                # If we have API data, we still use DB for chart to keep existing logic behavior 
+                # (which was: update_dashboard_kpis calls update_revenue_analytics which queries DB)
+                jobs_for_analytics = db.query(PrintJob).filter(PrintJob.shop_id == self.shop_id).all()
+                completed_jobs = [j for j in jobs_for_analytics if (j.status or "").strip().lower() == "completed"]
+                
+                now = datetime.now()
+                try:
+                    selected_date = datetime.strptime(self.selected_month_str, "%B %Y")
+                except:
+                    selected_date = now
+                
+                days_in_month = calendar.monthrange(selected_date.year, selected_date.month)[1]
+                daily_revenue = {d: 0.0 for d in range(1, days_in_month + 1)}
+                
+                for job in completed_jobs:
+                    if job.created_at and job.created_at.year == selected_date.year and job.created_at.month == selected_date.month:
+                        day = job.created_at.day
+                        daily_revenue[day] += float(job.amount or 0.0)
+                
+                values = []
+                labels = []
+                month_abbr = selected_date.strftime("%b")
+                for d in range(1, days_in_month + 1):
+                    values.append(daily_revenue[d])
+                    if d in [1, 5, 10, 15, 20, 25, 30]:
+                        labels.append(f"{month_abbr} {d}")
+                    else:
+                        labels.append("")
+                
+                analytics_data = {
+                    "values": values,
+                    "labels": labels,
+                    "selected_month_str": self.selected_month_str
+                }
+                
+                # Emit result
+                result = {
+                    "recent_jobs": all_jobs_objs,
+                    "kpis": kpis,
+                    "analytics_data": analytics_data
+                }
+                self.kpi_data_ready.emit(result)
+                
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"DashboardKPIWorker Error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            self.kpi_data_ready.emit({"error": str(e)})
+
 class JobPopupDialog(QDialog):
     """Simple, non-blocking popup notification for new print jobs"""
     def __init__(self, job, parent_dashboard):
@@ -2499,6 +2662,9 @@ class DashboardWindow(QMainWindow):
             
             # Phase 5: Ensure token is stored for WS setup
             self.session_token = token
+            
+            # Dashboard KPI Worker initialization
+            self.kpi_worker = None
             
             # Current page
             self.current_page = "dashboard"
@@ -3669,7 +3835,73 @@ class DashboardWindow(QMainWindow):
 
         self.content_stack.addTab(page, "Dashboard")
     
+    def on_kpi_data_ready(self, data):
+        """Slot to handle ready KPI data from background worker"""
+        try:
+            if "error" in data:
+                logger.error(f"Error in background KPI loading: {data['error']}")
+                return
+
+            logger.info("Updating Dashboard UI with background KPI data")
+            
+            # 1. Update KPI labels
+            kpis = data.get("kpis", {})
+            labels_map = {
+                'kpi_total_jobs_label': kpis.get('total', '0'),
+                'kpi_today_revenue_label': kpis.get('today', '₹ 0.00'),
+                'kpi_monthly_revenue_label': kpis.get('monthly', '₹ 0.00'),
+                'kpi_pending_jobs_label': kpis.get('pending', '0'),
+                'kpi_printing_jobs_label': kpis.get('printing', '0'),
+                'kpi_completed_jobs_label': kpis.get('completed', '0'),
+                'kpi_failed_jobs_label': kpis.get('failed', '0')
+            }
+            
+            for attr, text in labels_map.items():
+                if hasattr(self, attr) and getattr(self, attr):
+                    getattr(self, attr)[0].setText(text)
+
+            # 2. Update Recent Jobs list
+            recent_jobs = data.get("recent_jobs", [])
+            self.update_recent_jobs_list(recent_jobs)
+
+            # 3. Update Revenue Chart
+            analytics_data = data.get("analytics_data", {})
+            if analytics_data and hasattr(self, 'revenue_chart'):
+                self.revenue_chart.set_data(
+                    analytics_data.get("values", []), 
+                    analytics_data.get("labels", [])
+                )
+                if hasattr(self, 'analytics_subtitle'):
+                    self.analytics_subtitle.setText(analytics_data.get("selected_month_str", ""))
+
+            logger.info("Dashboard UI update from background worker complete")
+        except Exception as e:
+            logger.error(f"Error updating UI from KPI data: {e}")
+
     def update_dashboard_kpis(self, all_jobs=None):
+        """Update Dashboard KPI cards using background worker (OFF UI thread)"""
+        try:
+            # Check for existing worker to prevent overlap
+            if self.kpi_worker and self.kpi_worker.isRunning():
+                logger.info("KPI refresh already in progress, skipping...")
+                return
+
+            # Prepare data for worker
+            shop_id = self.shopkeeper_data.get('shop_id')
+            token = getattr(self, 'session_token', None)
+            selected_month = self.month_selector.currentText() if hasattr(self, 'month_selector') else datetime.now().strftime("%B %Y")
+
+            # Initialize and start worker
+            self.kpi_worker = DashboardKPIWorker(shop_id, token, selected_month)
+            self.kpi_worker.kpi_data_ready.connect(self.on_kpi_data_ready)
+            self.kpi_worker.start()
+            
+            logger.info("Started background Dashboard KPI update worker")
+                
+        except Exception as e:
+            logger.error(f"Error initiating dashboard KPI worker: {e}")
+
+    def _unused_old_update_dashboard_kpis(self, all_jobs=None):
         """Update Dashboard KPI cards with data from API (with DB fallback)"""
         try:
             logger.info("=== Starting Dashboard KPI Update ===")
@@ -3999,64 +4231,11 @@ class DashboardWindow(QMainWindow):
         pass
 
     def update_revenue_analytics(self):
-        """Calculate and update revenue chart data"""
-        if not hasattr(self, 'revenue_chart'):
-            return
-            
-        try:
-            db = SessionLocal()
-            try:
-                # Get completed jobs case-insensitive
-                jobs = db.query(PrintJob).filter(
-                    PrintJob.shop_id == self.shopkeeper_data['shop_id']
-                ).all()
-                
-                completed_jobs = [j for j in jobs if (j.status or "").strip().lower() == "completed"]
-                
-                now = datetime.now()
-                # Use current month from dropdown (demonstration uses current system month)
-                selected_month_str = self.month_selector.currentText() if hasattr(self, 'month_selector') else now.strftime("%B %Y")
-                
-                # Parse month and year for filtering
-                try:
-                    selected_date = datetime.strptime(selected_month_str, "%B %Y")
-                except:
-                    selected_date = now
-                    
-                month_start = selected_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                import calendar
-                days_in_month = calendar.monthrange(selected_date.year, selected_date.month)[1]
-                
-                values = []
-                labels = []
-                daily_revenue = {d: 0.0 for d in range(1, days_in_month + 1)}
-                
-                for job in completed_jobs:
-                    if job.created_at and job.created_at.year == selected_date.year and job.created_at.month == selected_date.month:
-                        day = job.created_at.day
-                        daily_revenue[day] += (job.amount or 0.0)
-                        
-                # Monthly Labels strictly matching reference: Mar 1, Mar 5, Mar 10, Mar 15, Mar 20, Mar 25, Mar 30
-                month_abbr = selected_date.strftime("%b")
-                for d in range(1, days_in_month + 1):
-                    values.append(daily_revenue[d])
-                    if d == 1 or d == 5 or d == 10 or d == 15 or d == 20 or d == 25 or d == 30:
-                        labels.append(f"{month_abbr} {d}")
-                    else:
-                        labels.append("")
-                
-                # Update Chart
-                self.revenue_chart.set_data(values, labels)
-                
-                # Update Subtitle to match reference (e.g., March 2023)
-                if hasattr(self, 'analytics_subtitle'):
-                    self.analytics_subtitle.setText(selected_month_str)
-                
-            finally:
-                db.close()
-                
-        except Exception as e:
-            logger.error(f"Error updating revenue analytics: {e}")
+        """No longer performs calculations directly. Calls update_dashboard_kpis to trigger background refresh."""
+        if hasattr(self, 'revenue_chart'):
+            # Just trigger a refresh of everything. 
+            # The background worker handles both KPIs and analytics now.
+            self.update_dashboard_kpis()
 
     def update_paper_stock_status(self):
         """Update paper stock status - placeholder for future implementation"""
