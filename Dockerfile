@@ -23,4 +23,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 EXPOSE 10000
 
 # Start Gunicorn (simple, stable, no eventlet)
-CMD ["gunicorn", "--workers", "1", "--timeout", "180", "--bind", "0.0.0.0:10000", "web_interface.app:app"]
+CMD ["gunicorn", "--workers", "1", "--worker-class", "eventlet", "--timeout", "180", "--bind", "0.0.0.0:10000", "--no-sendfile", "web_interface.app:app"]
+
