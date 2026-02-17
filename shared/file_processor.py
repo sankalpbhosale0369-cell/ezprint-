@@ -323,7 +323,9 @@ def create_preview_image(file_path, file_type, page_range="1", page_size="A4", o
     local_path, is_temp = ensure_local_path(file_path)
     try:
         # Step 0: Normalize document to PDF for high-fidelity previewing
-        if file_type != 'pdf':
+        DOCUMENT_TYPES = ['docx', 'doc', 'pptx', 'xlsx', 'odt', 'ods', 'odp']
+
+        if file_type.lower() in DOCUMENT_TYPES:
             normalized_path = normalize_document_for_preview(local_path, file_type)
             if normalized_path != local_path:
                 local_path = normalized_path
@@ -1386,6 +1388,11 @@ def normalize_document_for_preview(file_path, file_type):
         cache_dir.mkdir(exist_ok=True)
         
         import hashlib
+        import shutil
+
+        # ADD THESE 2 LINES:
+        soffice_path = shutil.which('soffice') or shutil.which('libreoffice')
+        print(f"DEBUG: LibreOffice found at: {soffice_path}")
         
         # ROOT FIX: Handle cache key for URLs vs Local Files
         if is_url(file_path):
