@@ -1766,11 +1766,17 @@ def generate_multi_page_previews(file_path, file_type, page_size="A4", orientati
         pdf_path = local_path
         
         # Step 1: Normalize non-PDF files for preview
-        if file_type != 'pdf':
-            pdf_path = normalize_document_for_preview(local_path, file_type)
-            if pdf_path == local_path:
-                print(f"Warning: Could not normalize {file_type} to PDF")
+        DOCUMENT_TYPES = ['docx', 'doc', 'pptx', 'xlsx', 'odt', 'ods', 'odp']
+        if file_type.lower() in DOCUMENT_TYPES:
+            normalized_path = normalize_document_for_preview(local_path, file_type)
+            if normalized_path != local_path:
+                local_path = normalized_path
+                pdf_path = normalized_path  # ← ADD THIS LINE
+                file_type = 'pdf'
+        elif file_type == 'pdf':
+            pdf_path = local_path
         
+
         # Step 2: Generate previews from PDF (or original if PDF)
         if file_type == 'pdf' or (pdf_path != local_path and Path(pdf_path).exists()):
             try:
