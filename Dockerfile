@@ -1,33 +1,28 @@
-# Base Python image
 FROM python:3.11-slim
 
-# Install system dependencies for LibreOffice + fonts
-RUN apt-get update && apt-get install -y \
-    libreoffice \
-    libreoffice-writer \
-    libreoffice-calc \
-    libreoffice-impress \
-    fonts-dejavu \
-    fonts-noto-color-emoji \
-    && rm -rf /var/lib/apt/lists/*
-
-
-# Set working directory
 WORKDIR /app
 
-# Copy project files 
-COPY . .
+# Install only required LibreOffice components (not full suite)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-writer \
+    libreoffice-core \
+    libreoffice-common \
+    fonts-dejavu-core \
+    fonts-liberation \
+    libpoppler-cpp-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-
-# Install Python dependencies
+# Copy requirements FIRST (Docker cache optimization)
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy project files AFTER pip install
+COPY . .
 
-# Expose port (Render requirement)
-EXPOSE 10000
+RUN mkdir -p /app/uploads/previews /app/uploads/temp
 
+ENV PORT=10000
+ENV PYTHONUNBUFFERED=1
+ENV HOME=/tmp
 
-# Start Gunicorn (SocketIO compatible + no sendfile bug fix)
-CMD ["gunicorn", "--workers", "1", "--worker-class", "eventlet", "--timeout", "180", "--bind", "0.0.0.0:10000", "--no-sendfile", "web_interface.app:app"]
-
-
+CMD ["gunicorn", "--worker-class", "eventlet", "--workers", "1", "--timeout", "180", "--no-sendfile", "web_interface.app:app", "--bind", "0.0.0.0:10000"]
