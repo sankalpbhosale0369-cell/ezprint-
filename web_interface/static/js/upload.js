@@ -239,37 +239,149 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // File input change handler
-    fileInput.addEventListener('change', function (e) {
-        const file = e.target.files[0];
-        if (file) {
-            currentFile = file;
-            const fileSize = (file.size / 1024 / 1024).toFixed(2);
-            fileInfo.innerHTML = `
-                <strong>Selected:</strong> ${file.name}<br>
-                <strong>Size:</strong> ${fileSize} MB<br>
-                <strong>Type:</strong> ${file.type || 'Unknown'}
-            `;
+    fileInput.addEventListener('change', async function (e) {
+        const files = Array.from(e.target.files);  // ← All selected files
 
-            // Enable preview button
+        if (files.length === 0) return;
+
+        // Check if all files are images
+        const imageFiles = files.filter(f =>
+            f.type.startsWith('image/') ||
+            /\.(png|jpe?g|gif|bmp|tiff)$/i.test(f.name)
+        );
+
+        // If multiple images, combine into PDF
+        if (imageFiles.length > 1) {
+            console.log(`Combining ${imageFiles.length} images into PDF...`);
+
+            // Show loading
+            if (fileInfo) {
+                fileInfo.innerHTML = `<div class="loading">Combining ${imageFiles.length} images...</div>`;
+            }
+
+            try {
+                // Reuse XEROX PDF combination logic
+                const pdfBlob = await combineImagesToPDFForPrint(imageFiles);
+                const pdfFile = new File([pdfBlob], `combined_${Date.now()}.pdf`, { type: 'application/pdf' });
+
+                currentFile = pdfFile;
+
+                // Update UI
+                if (fileInfo) {
+                    fileInfo.innerHTML = `
+                        <div class="file-selected">
+                            <i class="fas fa-file-pdf"></i>
+                            <span>${imageFiles.length} images combined into PDF</span>
+                            <span class="file-size">${(pdfFile.size / (1024 * 1024)).toFixed(2)} MB</span>
+                        </div>
+                    `;
+                }
+
+                // Enable buttons
+                previewBtn.disabled = false;
+                uploadBtn.disabled = false;
+
+                // Auto-preview
+                setTimeout(() => generatePreview(false), 500);
+
+            } catch (error) {
+                console.error('PDF combination failed:', error);
+                alert('Failed to combine images. Please try again.');
+                return;
+            }
+
+        } else {
+            // Single file - use as-is
+            currentFile = files[0];
+
+            // Show file info (existing code)
+            if (fileInfo) {
+                fileInfo.innerHTML = `
+                    <div class="file-selected">
+                        <i class="fas fa-file"></i>
+                        <span>${currentFile.name}</span>
+                        <span class="file-size">${(currentFile.size / (1024 * 1024)).toFixed(2)} MB</span>
+                    </div>
+                `;
+            }
+
+            // Enable buttons
             previewBtn.disabled = false;
             uploadBtn.disabled = false;
 
-            // Trigger preview automatically after file selection (PRINT section only)
-            if (currentMode !== 'xerox' && previewSection) {
-                // Short delay for better UX and state stability
-                setTimeout(() => {
-                    if (currentFile === file) { // Safeguard: ensure file hasn't changed
-                        generatePreview(true);
-                    }
-                }, 500);
-            }
-        } else {
-            currentFile = null;
-            fileInfo.innerHTML = '';
-            previewBtn.disabled = true;
-            uploadBtn.disabled = true;
+            // Auto-preview
+            setTimeout(() => generatePreview(false), 500);
         }
     });
+
+    /**
+     * Combine multiple images into a single PDF (for PRINT multi-file upload)
+     * Reuses XEROX PDF-lib logic
+     */
+    async function combineImagesToPDFForPrint(imageFiles) {
+        // Load PDF-lib (should already be loaded for XEROX)
+        const { PDFDocument } = PDFLib;
+
+        const pdfDoc = await PDFDocument.create();
+
+        for (let i = 0; i < imageFiles.length; i++) {
+            const file = imageFiles[i];
+            const imageBytes = await file.arrayBuffer();
+
+            // Try to embed as JPEG first, fallback to PNG
+            let pdfImage;
+            try {
+                pdfImage = await pdfDoc.embedJpg(imageBytes);
+            } catch (e) {
+                try {
+                    pdfImage = await pdfDoc.embedPng(imageBytes);
+                } catch (e2) {
+                    console.error(`Failed to embed image ${i + 1}:`, e2);
+                    continue;  // Skip this image
+                }
+            }
+
+            // Create A4 page
+            const pdfPage = pdfDoc.addPage([595, 842]);  // A4 in points (72 DPI)
+
+            // Calculate scaling to fit image on page
+            const pageWidth = 595;
+            const pageHeight = 842;
+            const margin = 20;
+
+            const availableWidth = pageWidth - (2 * margin);
+            const availableHeight = pageHeight - (2 * margin);
+
+            const imgAspectRatio = pdfImage.width / pdfImage.height;
+            const pageAspectRatio = availableWidth / availableHeight;
+
+            let drawWidth, drawHeight;
+            if (imgAspectRatio > pageAspectRatio) {
+                // Image wider than page - fit to width
+                drawWidth = availableWidth;
+                drawHeight = availableWidth / imgAspectRatio;
+            } else {
+                // Image taller than page - fit to height
+                drawHeight = availableHeight;
+                drawWidth = availableHeight * imgAspectRatio;
+            }
+
+            // Center image on page
+            const x = (pageWidth - drawWidth) / 2;
+            const y = (pageHeight - drawHeight) / 2;
+
+            pdfPage.drawImage(pdfImage, {
+                x: x,
+                y: y,
+                width: drawWidth,
+                height: drawHeight
+            });
+        }
+
+        const pdfBytes = await pdfDoc.save();
+        return new Blob([pdfBytes], { type: 'application/pdf' });
+    }
+
 
     // Preview button handler (PRINT flow only)
     previewBtn.addEventListener('click', function () {
@@ -1699,8 +1811,17 @@ document.addEventListener('DOMContentLoaded', function () {
             showPageRangeError('');
         }
 
-        // Create FormData
-        const formData = new FormData(uploadForm);
+
+        // Build FormData manually to use currentFile (combined PDF) instead of HTML input
+        const formData = new FormData();
+        formData.append('file', currentFile, currentFile.name);
+
+        // Manually copy all other form fields from uploadForm (except 'file')
+        new FormData(uploadForm).forEach((value, key) => {
+            if (key !== 'file') {
+                formData.append(key, value);
+            }
+        });
 
         // Add layout and page range data
         formData.set('layout_pages', layoutPages.value);

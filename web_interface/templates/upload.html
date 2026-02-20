@@ -10,6 +10,8 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v=10) }}">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
     <script src="https://unpkg.com/cropperjs@1.5.13/dist/cropper.min.js"></script>
+    <!-- pdf-lib for multi-image to PDF combining (PRINT multi-file upload) -->
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 </head>
 
 <body>
@@ -304,7 +306,7 @@
                             </div>
                         </div>
                         <input type="file" id="file" name="file"
-                            accept=".pdf,.docx,.doc,.png,.jpg,.jpeg,.gif,.bmp,.tiff" required>
+                            accept=".pdf,.docx,.doc,.png,.jpg,.jpeg,.gif,.bmp,.tiff" multiple required>
                     </div>
                     <div class="file-info" id="fileInfo"></div>
                 </div>
