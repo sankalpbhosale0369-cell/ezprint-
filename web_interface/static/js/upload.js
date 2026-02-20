@@ -282,7 +282,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 uploadBtn.disabled = false;
 
                 // Auto-preview
-                setTimeout(() => generatePreview(false), 500);
+                setTimeout(() => generatePreview(true), 500);
 
             } catch (error) {
                 console.error('PDF combination failed:', error);
@@ -310,7 +310,7 @@ document.addEventListener('DOMContentLoaded', function () {
             uploadBtn.disabled = false;
 
             // Auto-preview
-            setTimeout(() => generatePreview(false), 500);
+            setTimeout(() => generatePreview(true), 500);
         }
     });
 
@@ -1059,6 +1059,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
                     if (showLoading) {
                         scrollToElement(previewSection);
+                    } else {
+                        setTimeout(() => scrollToElement(previewSection), 300);
                     }
                 } else {
                     throw new Error(data.error || 'Preview failed');
@@ -1432,6 +1434,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
                     // Show success toast (optional UX polish)
                     showXeroxPreviewToast('Preview updated');
+                    setTimeout(() => scrollToElement(previewSection), 300);
 
                     console.info('XEROX auto-preview: request complete', { pages: totalPages, generationId: myGen });
 
