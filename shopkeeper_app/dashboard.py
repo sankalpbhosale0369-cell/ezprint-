@@ -2613,10 +2613,6 @@ class DashboardWindow(QMainWindow):
             # Map job IDs to job cards and job objects for selection
             self.job_cards_map = {}  # {job_id: {'card': widget, 'job': job_object}}
             
-            # Track paper status for popup (only show once per paper-empty event)
-            self.previous_paper_status = {}  # Track previous status per printer: {printer_name: "ok"/"issue"}
-            self.paper_out_popup_shown = {}  # Track which printers have shown popup: {printer_name: True}
-            
             # Track previous printer connection state for disconnect popup
             self.previous_printer_connected = None  # None = initial state, True = connected, False = disconnected
             self.printer_disconnect_popup_shown = False  # Track if popup has been shown for current disconnect state
@@ -2707,9 +2703,6 @@ class DashboardWindow(QMainWindow):
         
         # Setup printer connectivity status polling
         self.setup_printer_connectivity_polling()
-        
-        # Setup real-time paper status polling (every 1000ms)
-        self.setup_paper_status_polling()
 
         # Schedule background printer discovery (avoids startup freeze)
         QTimer.singleShot(100, self._start_background_printer_discovery)
@@ -3871,7 +3864,6 @@ class DashboardWindow(QMainWindow):
         
         # Initialize KPI cards with realtime data (after cards are created)
         self.update_dashboard_kpis()
-        self.update_paper_stock_status()
 
         # Initialize printer connection state (popup check will happen in showEvent after window is visible)
         active_printers = self.printer_manager.get_active_printers(self.shopkeeper_data['shop_id'])
@@ -4290,11 +4282,6 @@ class DashboardWindow(QMainWindow):
             # Just trigger a refresh of everything. 
             # The background worker handles both KPIs and analytics now.
             self.update_dashboard_kpis()
-
-    def update_paper_stock_status(self):
-        """Update paper stock status - placeholder for future implementation"""
-        # This method is called but not yet implemented
-        pass
 
 
     def create_inventory_page(self):
@@ -6106,21 +6093,33 @@ class DashboardWindow(QMainWindow):
                     job = j
                     break
             db.close()
-            if not job or not job.file_path or not os.path.exists(job.file_path):
-                self.show_toast("File not found on disk")
+            if not job:
+                self.show_toast("Job not found")
                 return
-            # Open with default app
-            try:
-                if sys.platform.startswith('win'):
-                    os.startfile(job.file_path)
-                elif sys.platform == 'darwin':
-                    import subprocess
-                    subprocess.Popen(['open', job.file_path])
-                else:
-                    import subprocess
-                    subprocess.Popen(['xdg-open', job.file_path])
-            except Exception:
-                self.show_toast("Unable to open file")
+
+            # Cloudinary file — open in browser
+            if job.cloudinary_public_id:
+                import webbrowser
+                from shared.cloudinary_helper import get_cloudinary_url
+                url = get_cloudinary_url(job.cloudinary_public_id)
+                webbrowser.open(url)
+
+            # Local file fallback
+            elif job.file_path and os.path.exists(job.file_path):
+                try:
+                    if sys.platform.startswith('win'):
+                        os.startfile(job.file_path)
+                    elif sys.platform == 'darwin':
+                        import subprocess
+                        subprocess.Popen(['open', job.file_path])
+                    else:
+                        import subprocess
+                        subprocess.Popen(['xdg-open', job.file_path])
+                except Exception:
+                    self.show_toast("Unable to open file")
+
+            else:
+                self.show_toast("File not found")
         except Exception as e:
             logger.error(f"Error opening file: {e}")
 
@@ -6204,7 +6203,15 @@ class DashboardWindow(QMainWindow):
 
     def _open_job_file(self, job):
         try:
-            if job and job.file_path and os.path.exists(job.file_path):
+            if job and job.cloudinary_public_id:
+                import webbrowser
+                from shared.cloudinary_helper import get_cloudinary_url
+                url = get_cloudinary_url(job.cloudinary_public_id)
+                if url:
+                    webbrowser.open(url)
+                else:
+                    self.show_toast("Unable to generate file URL")
+            elif job and job.file_path and os.path.exists(job.file_path):
                 if sys.platform.startswith('win'):
                     os.startfile(job.file_path)
                 elif sys.platform == 'darwin':
@@ -6215,6 +6222,7 @@ class DashboardWindow(QMainWindow):
                     subprocess.Popen(['xdg-open', job.file_path])
             else:
                 self.show_toast("File not found")
+
         except Exception:
             self.show_toast("Unable to open file")
 
@@ -7905,15 +7913,6 @@ class DashboardWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error setting up printer connectivity polling: {e}")
     
-    def setup_paper_status_polling(self):
-        """Setup timer for real-time paper status monitoring (every 1000ms)"""
-        try:
-            self.paper_status_timer = QTimer()
-            self.paper_status_timer.timeout.connect(self.check_paper_status_realtime)
-            self.paper_status_timer.start(1000)  # Update every 1 second
-            logger.info("Paper status polling started")
-        except Exception as e:
-            logger.error(f"Error setting up paper status polling: {e}")
 
     def _start_background_printer_discovery(self):
         """Start background printer discovery to avoid startup freeze."""
@@ -7946,67 +7945,7 @@ class DashboardWindow(QMainWindow):
             logger.error(f"Error handling cold discovery completion: {e}")
             if hasattr(self, 'connect_printers_status_label'):
                 self.connect_printers_status_label.setText("Discovery completed with errors")
-    
-    def check_paper_status_realtime(self):
-        """Check paper status in real-time and show popup on paper-out condition"""
-        try:
-            # Only check if dashboard is visible and ready
-            if not self.isVisible() or not self.dashboard_ready:
-                return
-            
-            # Get active (connected) printers
-            active_printers = self.printer_manager.get_active_printers(self.shopkeeper_data['shop_id'])
-            
-            if not active_printers:
-                return
-            
-            # Check each connected printer for paper status
-            for printer_name in active_printers:
-                try:
-                    # Get current paper status
-                    status_code, message = self.printer_manager.get_printer_paper_status(printer_name)
-                    
-                    # Get previous status for this printer (default to "ok" if not tracked)
-                    previous_status = self.previous_paper_status.get(printer_name, "ok")
-                    
-                    # Detect transition from OK → EMPTY (paper-out condition)
-                    if previous_status == "ok" and status_code == "issue":
-                        # Verify printer is actually connected
-                        available_printers = self.printer_manager.get_available_printers()
-                        printer_connected = any(p.get('name') == printer_name and 
-                                               p.get('status') == 'Online' for p in available_printers)
-                        
-                        if printer_connected and printer_name not in self.paper_out_popup_shown:
-                            # Show popup for paper-out condition
-                            self.show_paper_out_popup(printer_name)
-                            self.paper_out_popup_shown[printer_name] = True
-                    
-                    # Reset popup flag when paper status becomes OK again
-                    elif status_code == "ok":
-                        if printer_name in self.paper_out_popup_shown:
-                            del self.paper_out_popup_shown[printer_name]
-                    
-                    # Update previous status for this printer
-                    self.previous_paper_status[printer_name] = status_code
-                    
-                except Exception as e:
-                    logger.error(f"Error checking paper status for {printer_name}: {e}")
-                    
-        except Exception as e:
-            logger.error(f"Error in real-time paper status check: {e}")
-    
-    def show_paper_out_popup(self, printer_name):
-        """Show modal popup when paper runs out on a connected printer"""
-        try:
-            msg = QMessageBox(self)
-            msg.setWindowTitle("Printer Alert")
-            # Injected printer name into message as per requirements
-            msg.setText(f"Paper tray is empty.\nPrinter: {printer_name}\nPlease load paper to continue printing.")
-            msg.setIcon(QMessageBox.Warning)
-            msg.setStandardButtons(QMessageBox.Ok)
-            msg.exec_()
-        except Exception as e:
-            logger.error(f"Error showing paper-out popup: {e}")
+
     
     def check_and_show_printer_disconnect_popup(self):
         """Check printer status and show popup if disconnected (helper method)"""
@@ -8116,57 +8055,7 @@ class DashboardWindow(QMainWindow):
             
         except Exception as e:
             logger.error(f"Error updating dashboard printer status: {e}")
-    
-    
-    def update_paper_stock_status(self):
-        """Update paper stock status and show popup when paper runs out"""
-        try:
-            active_printers = self.printer_manager.get_active_printers(self.shopkeeper_data['shop_id'])
-            
-            # Check each active (connected) printer for paper status
-            if active_printers:
-                for printer_name in active_printers:
-                    status_code, message = self.printer_manager.get_printer_paper_status(printer_name)
-                    
-                    # Check if paper status changed from OK to OUT (paper empty event)
-                    if status_code == "issue":
-                        # Check if this is a new paper-empty event (status changed from OK to OUT)
-                        # Only show popup once per printer per paper-empty event
-                        if printer_name not in self.paper_empty_popup_shown:
-                            # Verify printer is actually connected before showing popup
-                            # Check if printer is online/connected
-                            try:
-                                available_printers = self.printer_manager.get_available_printers()
-                                printer_connected = any(p.get('name') == printer_name and 
-                                                       p.get('status') == 'Online' for p in available_printers)
-                                
-                                if printer_connected:
-                                    # Show popup for this printer (only once per event)
-                                    self.show_paper_empty_popup(printer_name)
-                                    self.paper_empty_popup_shown[printer_name] = True
-                            except Exception as e:
-                                logger.error(f"Error checking printer connection status: {e}")
-                    elif status_code == "ok":
-                        # Paper is OK again - reset popup flag for this printer
-                        # This allows popup to show again if paper runs out in the future
-                        if printer_name in self.paper_empty_popup_shown:
-                            del self.paper_empty_popup_shown[printer_name]
-            
-        except Exception as e:
-            logger.error(f"Error updating paper stock status: {e}")
-    
-    def show_paper_empty_popup(self, printer_name):
-        """Show modal popup when paper runs out on a connected printer"""
-        try:
-            msg = QMessageBox(self)
-            msg.setWindowTitle("Printer Alert")
-            msg.setText(f"Paper tray is empty.\nPrinter: {printer_name}\nPlease load paper to continue printing.")
-            msg.setIcon(QMessageBox.Warning)
-            msg.setStandardButtons(QMessageBox.Ok)
-            msg.exec_()
-        except Exception as e:
-            logger.error(f"Error showing paper empty popup: {e}")
-    
+
     
     @safe_ui_action("WEBSOCKET_MESSAGE")
     def handle_thread_safe_operation(self, operation, data):
@@ -9373,21 +9262,19 @@ class DashboardWindow(QMainWindow):
             
             file_path = getattr(job, 'file_path', None)
             
-            if not file_path:
-                QMessageBox.critical(self, "File Error", "File path not assigned to this job.")
-                return
-                
-            if not os.path.exists(file_path):
-                QMessageBox.critical(self, "File Error", "File not found for the selected job.")
-                return
-            
-            # Step 3: Open file using OS default viewer
-            try:
-                # Windows implementation
-                os.startfile(file_path)
-            except Exception as e:
-                logger.error(f"Error opening file {file_path}: {e}")
-                QMessageBox.critical(self, "Error", "Unable to open the file. Please check file permissions.")
+            if job.cloudinary_public_id:
+                import webbrowser
+                from shared.cloudinary_helper import get_cloudinary_url
+                url = get_cloudinary_url(job.cloudinary_public_id)
+                webbrowser.open(url)
+            elif file_path and os.path.exists(file_path):
+                try:
+                    os.startfile(file_path)
+                except Exception as e:
+                    logger.error(f"Error opening file {file_path}: {e}")
+                    QMessageBox.critical(self, "Error", "Unable to open the file. Please check file permissions.")
+            else:
+                QMessageBox.critical(self, "File Error", "File not found for this job.")
                 
         except Exception as e:
             logger.error(f"Fatal error in bulk_view_jobs: {e}")
@@ -9533,7 +9420,6 @@ class DashboardWindow(QMainWindow):
         # Update dashboard KPIs and status indicators
         if self.current_page == "dashboard":
             self.update_dashboard_kpis()
-            self.update_paper_stock_status()
 
     @safe_ui_action("MONITOR_ACTIVE_JOBS")
     def monitor_active_jobs(self):
@@ -9748,7 +9634,7 @@ class DashboardWindow(QMainWindow):
         
         timers_to_stop = [
             'timer', 'status_monitor_timer', 'poll_timer', 'printer_connectivity_timer',
-            'paper_status_timer', 'websocket_reconnect_timer', 'icon_timer',
+            'websocket_reconnect_timer', 'icon_timer',
             'payments_refresh_timer', 'connect_printers_auto_refresh_timer'
         ]
         

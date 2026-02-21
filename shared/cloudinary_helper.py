@@ -74,3 +74,12 @@ def delete_file_from_cloudinary(cloudinary_url):
     except Exception as e:
         logger.warning(f"Cloudinary delete failed: {e}")
         return False
+
+def get_cloudinary_url(public_id):
+    """Generate Cloudinary URL from public_id"""
+    try:
+        import cloudinary
+        cloud_name = cloudinary.config().cloud_name
+        return f"https://res.cloudinary.com/{cloud_name}/raw/upload/{public_id}"
+    except Exception:
+        return None
