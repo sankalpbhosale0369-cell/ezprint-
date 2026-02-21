@@ -276,7 +276,7 @@ class LoginWindow(QMainWindow):
                     pass
             QTimer.singleShot(1000, _open)
         else:
-            self.show_error_message("Invalid credentials")
+            self.show_error_message(message)
     
     @safe_ui_action("REGISTRATION")
     def register(self):
@@ -368,7 +368,7 @@ class LoginWindow(QMainWindow):
         """Show a toast-style message at the top of the window"""
         try:
             # Create toast label
-            toast = QLabel(message)
+            toast = QLabel(message, self.centralWidget())
             toast.setStyleSheet(f"""
                 QLabel {{
                     background-color: {color};
@@ -388,8 +388,8 @@ class LoginWindow(QMainWindow):
             toast.setFixedHeight(50)
             
             # Position at top center of the window
+            toast.adjustSize()
             x = (self.width() - toast.width()) // 2
-            y = 30  # 30px from top
             toast.move(x, y)
             toast.show()
             

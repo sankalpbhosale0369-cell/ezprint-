@@ -8,7 +8,9 @@
     --radius: 12px;
 }
 
-* { box-sizing: border-box; }
+* {
+    box-sizing: border-box;
+}
 
 body.admin-body {
     margin: 0;
@@ -231,7 +233,9 @@ body.auth-body {
     cursor: pointer;
 }
 
-.btn-primary:hover { opacity: 0.95; }
+.btn-primary:hover {
+    opacity: 0.95;
+}
 
 .flash {
     background: #fef2f2;
@@ -243,10 +247,27 @@ body.auth-body {
     font-size: 14px;
 }
 
-@media (max-width: 900px) {
-    .layout { grid-template-columns: 1fr; }
-    .sidebar { flex-direction: row; overflow-x: auto; }
-    .nav-item { white-space: nowrap; }
-    .topbar { position: static; }
+.flash-item {
+    padding: 5px 0;
+    color: #b91c1c;
+    font-size: 14px;
 }
 
+@media (max-width: 900px) {
+    .layout {
+        grid-template-columns: 1fr;
+    }
+
+    .sidebar {
+        flex-direction: row;
+        overflow-x: auto;
+    }
+
+    .nav-item {
+        white-space: nowrap;
+    }
+
+    .topbar {
+        position: static;
+    }
+}

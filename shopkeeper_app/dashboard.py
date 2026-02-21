@@ -2714,6 +2714,60 @@ class DashboardWindow(QMainWindow):
         # Schedule background printer discovery (avoids startup freeze)
         QTimer.singleShot(100, self._start_background_printer_discovery)
 
+    # ------------------------------------------------------------------
+    # Database helpers
+    # ------------------------------------------------------------------
+
+    def safe_db_operation(self, operation_func):
+        """
+        Wrapper for safe database operations with automatic rollback.
+
+        Usage::
+
+            def my_operation():
+                # Your DB logic here
+                return result
+
+            return self.safe_db_operation(my_operation)
+        """
+        try:
+            result = operation_func()
+            self.db.commit()
+            return result
+        except Exception as e:
+            self.db.rollback()
+            error_msg = f"Database operation failed: {str(e)}"
+            logger.error(error_msg)
+            QMessageBox.critical(self, "Database Error", error_msg)
+            return None
+
+    def bulk_delete_jobs(self, job_ids):
+        """Delete multiple jobs safely, cleaning up Cloudinary assets as needed."""
+        def delete_operation():
+            from shared.cloudinary_helper import delete_file_from_cloudinary
+            deleted_count = 0
+            for job_id in job_ids:
+                job = self.db.query(PrintJob).filter_by(job_id=job_id).first()
+                if job:
+                    # Remove from Cloudinary if an asset is linked
+                    if job.cloudinary_public_id:
+                        try:
+                            delete_file_from_cloudinary(job.cloudinary_public_id)
+                        except Exception:
+                            pass  # Non-fatal: continue deletion even if cloud cleanup fails
+
+                    self.db.delete(job)
+                    deleted_count += 1
+
+            return deleted_count
+
+        count = self.safe_db_operation(delete_operation)
+        if count:
+            QMessageBox.information(self, "Success", f"Deleted {count} job(s)")
+            self.load_print_jobs()
+
+        return count
+
     def _api_job_to_obj(self, job_dict):
         """Convert API job dictionary to an object-like structure for backward compatibility"""
         from types import SimpleNamespace
