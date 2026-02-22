@@ -26,6 +26,8 @@ class Shopkeeper(Base):
     qr_code_path = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)
+    otp_code = Column(String(6), nullable=True)
+    otp_expires_at = Column(DateTime, nullable=True)
     
     def __init__(self, username, email, password_hash, shop_name):
         self.shop_id = str(uuid.uuid4())
@@ -170,6 +172,10 @@ def migrate_schema():
                 columns_to_add.append(('contact_number', 'VARCHAR(20)'))
             if 'shopkeeper_name' not in existing_cols:
                 columns_to_add.append(('shopkeeper_name', 'VARCHAR(100)'))
+            if 'otp_code' not in existing_cols:
+                columns_to_add.append(('otp_code', 'VARCHAR(6)'))
+            if 'otp_expires_at' not in existing_cols:
+                columns_to_add.append(('otp_expires_at', 'TIMESTAMP'))
             
             # Add missing columns
             with engine.connect() as conn:

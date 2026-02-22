@@ -7,7 +7,8 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QLabel, QPushButton, QLineEdit, 
                            QMessageBox, QTabWidget, QGroupBox, QTextEdit,
-                           QComboBox, QCheckBox, QFormLayout, QFrame)
+                           QComboBox, QCheckBox, QFormLayout, QFrame,
+                           QDialog, QStackedWidget)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QPixmap, QIcon
 import logging
@@ -34,6 +35,177 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+class ForgotPasswordDialog(QDialog):
+    def __init__(self, auth_manager, parent=None):
+        super().__init__(parent)
+        self.auth_manager = auth_manager
+        self.username = None
+        self.setWindowTitle("Forgot Password")
+        self.setFixedWidth(400)
+        self.setStyleSheet("""
+            QDialog { background-color: #f8fafc; }
+            QLabel { color: #1e293b; font-size: 14px; }
+            QLineEdit {
+                padding: 10px;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                font-size: 14px;
+                background: white;
+            }
+            QPushButton {
+                background-color: #6366f1;
+                color: white;
+                padding: 10px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: bold;
+                border: none;
+            }
+            QPushButton:hover { background-color: #4f46e5; }
+        """)
+        
+        self.stack = QStackedWidget()
+        self.init_screen1()
+        self.init_screen2()
+        self.init_screen3()
+        
+        layout = QVBoxLayout()
+        layout.addWidget(self.stack)
+        self.setLayout(layout)
+    
+    def init_screen1(self):
+        widget = QWidget()
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+        layout.setContentsMargins(30, 30, 30, 30)
+        
+        title = QLabel("Forgot Password")
+        title.setStyleSheet("font-size: 20px; font-weight: bold;")
+        title.setAlignment(Qt.AlignCenter)
+        
+        info = QLabel("Enter your username.\nOTP will be sent to your registered email.")
+        info.setAlignment(Qt.AlignCenter)
+        info.setStyleSheet("color: #64748b; font-size: 13px;")
+        info.setWordWrap(True)
+        
+        self.s1_username = QLineEdit()
+        self.s1_username.setPlaceholderText("Enter your username")
+        
+        btn = QPushButton("Send OTP")
+        btn.clicked.connect(self.handle_send_otp)
+        
+        layout.addWidget(title)
+        layout.addWidget(info)
+        layout.addWidget(QLabel("Username"))
+        layout.addWidget(self.s1_username)
+        layout.addWidget(btn)
+        widget.setLayout(layout)
+        self.stack.addWidget(widget)
+    
+    def init_screen2(self):
+        widget = QWidget()
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+        layout.setContentsMargins(30, 30, 30, 30)
+        
+        title = QLabel("Enter OTP")
+        title.setStyleSheet("font-size: 20px; font-weight: bold;")
+        title.setAlignment(Qt.AlignCenter)
+        
+        self.s2_info = QLabel("OTP sent to your registered email.\nValid for 10 minutes.")
+        self.s2_info.setAlignment(Qt.AlignCenter)
+        self.s2_info.setStyleSheet("color: #64748b; font-size: 13px;")
+        self.s2_info.setWordWrap(True)
+        
+        self.s2_otp = QLineEdit()
+        self.s2_otp.setPlaceholderText("Enter 6-digit OTP")
+        self.s2_otp.setMaxLength(6)
+        self.s2_otp.setAlignment(Qt.AlignCenter)
+        
+        btn = QPushButton("Verify OTP")
+        btn.clicked.connect(self.handle_verify_otp)
+        
+        layout.addWidget(title)
+        layout.addWidget(self.s2_info)
+        layout.addWidget(QLabel("OTP"))
+        layout.addWidget(self.s2_otp)
+        layout.addWidget(btn)
+        widget.setLayout(layout)
+        self.stack.addWidget(widget)
+    
+    def init_screen3(self):
+        widget = QWidget()
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+        layout.setContentsMargins(30, 30, 30, 30)
+        
+        title = QLabel("Reset Password")
+        title.setStyleSheet("font-size: 20px; font-weight: bold;")
+        title.setAlignment(Qt.AlignCenter)
+        
+        self.s3_new_pass = QLineEdit()
+        self.s3_new_pass.setPlaceholderText("Enter new password")
+        self.s3_new_pass.setEchoMode(QLineEdit.Password)
+        
+        self.s3_confirm_pass = QLineEdit()
+        self.s3_confirm_pass.setPlaceholderText("Confirm new password")
+        self.s3_confirm_pass.setEchoMode(QLineEdit.Password)
+        
+        btn = QPushButton("Reset Password")
+        btn.clicked.connect(self.handle_reset_password)
+        
+        layout.addWidget(title)
+        layout.addWidget(QLabel("New Password"))
+        layout.addWidget(self.s3_new_pass)
+        layout.addWidget(QLabel("Confirm Password"))
+        layout.addWidget(self.s3_confirm_pass)
+        layout.addWidget(btn)
+        widget.setLayout(layout)
+        self.stack.addWidget(widget)
+    
+    def handle_send_otp(self):
+        username = self.s1_username.text().strip()
+        if not username:
+            QMessageBox.warning(self, "Error", "Please enter username")
+            return
+        success, message = self.auth_manager.send_otp_email(username)
+        if success:
+            self.username = username
+            self.stack.setCurrentIndex(1)
+        else:
+            QMessageBox.warning(self, "Error", message)
+    
+    def handle_verify_otp(self):
+        otp = self.s2_otp.text().strip()
+        if len(otp) != 6:
+            QMessageBox.warning(self, "Error", "Enter valid 6-digit OTP")
+            return
+        success, message = self.auth_manager.verify_otp(self.username, otp)
+        if success:
+            self.stack.setCurrentIndex(2)
+        else:
+            QMessageBox.warning(self, "Error", message)
+    
+    def handle_reset_password(self):
+        new_pass = self.s3_new_pass.text()
+        confirm = self.s3_confirm_pass.text()
+        if not new_pass or not confirm:
+            QMessageBox.warning(self, "Error", "Please fill all fields")
+            return
+        if new_pass != confirm:
+            QMessageBox.warning(self, "Error", "Passwords do not match")
+            return
+        if len(new_pass) < 6:
+            QMessageBox.warning(self, "Error", "Minimum 6 characters required")
+            return
+        success, message = self.auth_manager.reset_password(self.username, new_pass)
+        if success:
+            QMessageBox.information(self, "Success", "Password reset successful!")
+            self.accept()
+        else:
+            QMessageBox.warning(self, "Error", message)
+
 
 class LoginWindow(QMainWindow):
     def __init__(self):
@@ -161,6 +333,22 @@ class LoginWindow(QMainWindow):
         login_btn.clicked.connect(self.login)
         card_layout.addWidget(login_btn)
 
+        # Forgot password link
+        forgot_link = QPushButton("Forgot Password?")
+        forgot_link.setStyleSheet("""
+            QPushButton {
+                background: none;
+                border: none;
+                color: #6366f1;
+                font-size: 13px;
+                text-decoration: underline;
+            }
+            QPushButton:hover { color: #4f46e5; }
+        """)
+        forgot_link.setCursor(Qt.PointingHandCursor)
+        forgot_link.clicked.connect(self.open_forgot_password)
+        card_layout.addWidget(forgot_link)
+
         # Register link
         register_link = QLabel("Don't have an account? <a href='#'>Register your shop</a>")
         register_link.setAlignment(Qt.AlignCenter)
@@ -278,6 +466,10 @@ class LoginWindow(QMainWindow):
         else:
             self.show_error_message(message)
     
+    def open_forgot_password(self):
+        dialog = ForgotPasswordDialog(self.auth_manager, self)
+        dialog.exec_()
+    
     @safe_ui_action("REGISTRATION")
     def register(self):
         """Handle registration"""
@@ -390,6 +582,7 @@ class LoginWindow(QMainWindow):
             # Position at top center of the window
             toast.adjustSize()
             x = (self.width() - toast.width()) // 2
+            y = 30
             toast.move(x, y)
             toast.show()
             
@@ -401,8 +594,7 @@ class LoginWindow(QMainWindow):
             
         except Exception as e:
             logger.error(f"Error showing toast message: {e}")
-            # Fallback to simple message box if toast fails
-            QMessageBox.information(self, "Info", message)
+            # No recursive call — just log the error
 
 def main():
     """Main application entry point"""

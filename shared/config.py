@@ -116,3 +116,9 @@ def validate_production_config():
 
 # Execute validation
 validate_production_config()
+
+# Email/SMTP Configuration
+SMTP_HOST = 'smtp.gmail.com'
+SMTP_PORT = 587
+SMTP_EMAIL = os.getenv('SMTP_EMAIL', '')
+SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', '')

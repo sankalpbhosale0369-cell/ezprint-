@@ -3,7 +3,11 @@ Authentication system for shopkeeper application
 """
 import bcrypt
 import uuid
-from datetime import datetime
+import random
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 import sys
 import os
@@ -13,7 +17,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.database import Shopkeeper, SessionLocal
 from shared.qr_generator import generate_qr_code
-from shared.config import LOG_FILE, EZPRINT_BASE_URL
+from shared.config import LOG_FILE, EZPRINT_BASE_URL, SMTP_HOST, SMTP_PORT, SMTP_EMAIL, SMTP_PASSWORD
 from shopkeeper_app.api_client import ApiClient
 import logging
 
@@ -247,3 +251,69 @@ class AuthManager:
     def close(self):
         """Close database connection"""
         self.db.close()
+
+    def send_otp_email(self, username):
+        try:
+            shopkeeper = self.db.query(Shopkeeper).filter_by(username=username).first()
+            if not shopkeeper:
+                return False, "Username not found"
+            
+            otp = str(random.randint(100000, 999999))
+            shopkeeper.otp_code = otp
+            shopkeeper.otp_expires_at = datetime.utcnow() + timedelta(minutes=10)
+            self.db.commit()
+            
+            msg = MIMEMultipart()
+            msg['From'] = SMTP_EMAIL
+            msg['To'] = shopkeeper.email
+            msg['Subject'] = "EzPrint Password Reset OTP"
+            body = f"""
+Hello {shopkeeper.shop_name},
+
+Your OTP for password reset is: {otp}
+
+This OTP is valid for 10 minutes.
+If you did not request this, please ignore this email.
+
+- EzPrint Team
+            """
+            msg.attach(MIMEText(body, 'plain'))
+            
+            server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
+            server.starttls()
+            server.login(SMTP_EMAIL, SMTP_PASSWORD)
+            server.send_message(msg)
+            server.quit()
+            
+            return True, "OTP sent to registered email"
+        except Exception as e:
+            logger.error(f"OTP send error: {e}")
+            return False, "Failed to send OTP. Check email config."
+
+    def verify_otp(self, username, otp):
+        try:
+            shopkeeper = self.db.query(Shopkeeper).filter_by(username=username).first()
+            if not shopkeeper:
+                return False, "Username not found"
+            if not shopkeeper.otp_code or not shopkeeper.otp_expires_at:
+                return False, "No OTP requested"
+            if datetime.utcnow() > shopkeeper.otp_expires_at:
+                return False, "OTP expired. Request a new one."
+            if shopkeeper.otp_code != otp:
+                return False, "Invalid OTP"
+            return True, "OTP verified"
+        except Exception as e:
+            return False, "Verification failed"
+
+    def reset_password(self, username, new_password):
+        try:
+            shopkeeper = self.db.query(Shopkeeper).filter_by(username=username).first()
+            if not shopkeeper:
+                return False, "Username not found"
+            shopkeeper.password_hash = self.hash_password(new_password)
+            shopkeeper.otp_code = None
+            shopkeeper.otp_expires_at = None
+            self.db.commit()
+            return True, "Password reset successful"
+        except Exception as e:
+            return False, "Password reset failed"
