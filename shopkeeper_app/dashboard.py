@@ -9579,54 +9579,50 @@ class DashboardWindow(QMainWindow):
             logger.error(f"Error in delayed printer disconnect check: {e}")
     
     def closeEvent(self, event):
-        """Handle application close with comprehensive cleanup"""
-        logger.info("Dashboard window closing - starting shutdown process...")
-        
-        # Accept the event immediately to prevent UI blocking
+        """Handle window close event"""
+
+        # Agar logout flow se aa raha hai to sirf close karo, force quit mat karo
+        if getattr(self, '_is_logout_destroy', False):
+            logger.info("Dashboard window closed after logout cleanup")
+            event.accept()
+            return
+
+        # Normal window close (X button) — tab bhi graceful shutdown
+        logger.info("Dashboard window closing via X button - starting shutdown...")
         event.accept()
-        
-        # Hide the window immediately for better UX
         self.hide()
-        
-        # Set up aggressive timeout for entire shutdown process
+
+        # Force exit after 3 seconds max (safety net)
         def force_exit_after_timeout():
             logger.warning("Shutdown timeout reached, forcing exit")
             import os
-            import sys
             try:
                 os._exit(0)
             except Exception:
+                import sys
                 sys.exit(0)
-        
-        # Schedule force exit after 2 seconds maximum
+
         from PyQt5.QtCore import QTimer
-        QTimer.singleShot(2000, force_exit_after_timeout)
-        
-        try:
-            # Step 1: Stop all timers immediately
-            self._stop_all_timers()
-            
-            # Step 2: Stop WebSocket client and reconnection threads
-            self._stop_websocket_services()
-            
-            # Step 3: Stop printer discovery and connectivity services
-            self._stop_printer_services()
-            
-            # Step 4: Terminate all background workers
-            self._stop_background_workers()
-            
-            # Step 5: Close database session
-            self._close_database()
-            
-            # Step 6: Force quit application
-            self._force_application_quit()
-            
-            logger.info("Application exited successfully")
-            
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
-            # Even if there's an error, we still want to close
-            self._force_application_quit()
+        QTimer.singleShot(3000, force_exit_after_timeout)
+
+        # Run cleanup + quit in background
+        import threading
+
+        def shutdown_cleanup():
+            try:
+                self._stop_all_timers()
+                self._stop_websocket_services()
+                self._stop_printer_services()
+                self._stop_background_workers()
+                self._close_database()
+            except Exception as e:
+                logger.error(f"Error during shutdown cleanup: {e}")
+            finally:
+                from PyQt5.QtCore import QTimer
+                QTimer.singleShot(0, self._force_application_quit)
+
+        t = threading.Thread(target=shutdown_cleanup, daemon=True)
+        t.start()
     
     def _stop_all_timers(self):
         """Stop all QTimer instances"""
@@ -9793,53 +9789,87 @@ class DashboardWindow(QMainWindow):
     def logout(self):
         """Perform logout and return to login window"""
         logger.info("Logout requested - performing cleanup...")
-        
-        try:
-            # Phase 4: Handle API logout
-            if hasattr(self, 'auth_manager'):
-                shop_id = self.shopkeeper_data.get('shop_id')
-                logger.info(f"Triggering API logout for shop_id: {shop_id}")
-                success, message = self.auth_manager.logout_shopkeeper(shop_id)
-                if success:
-                    logger.info(f"API logout successful: {message}")
-                else:
-                    logger.warning(f"API logout failed: {message}")
 
-            # Stop all timers
-            self._stop_all_timers()
-            
-            # Stop WebSocket services
-            self._stop_websocket_services()
-            if self.websocket_client:
-                self.websocket_client = None
-            
-            # Stop printer services
-            self._stop_printer_services()
-            
-            # Stop background workers
-            self._stop_background_workers()
-            
-            # Close database
-            self._close_database()
-            
-            # Callback to show login window
-            if self.on_logout_cb:
-                self.on_logout_cb()
-            
-            # Close dashboard
-            self.close()
-            
-            logger.info("Logout completed successfully")
-            
-        except Exception as e:
-            logger.error(f"Error during logout: {e}")
-            # Still try to close even if there's an error
+        # Immediately disable the logout button to prevent double-click
+        try:
+            sender = self.sender()
+            if sender:
+                sender.setEnabled(False)
+        except Exception:
+            pass
+
+        # Stop all timers immediately (safe on UI thread, no blocking)
+        self._stop_all_timers()
+
+        # Close database immediately (non-blocking)
+        self._close_database()
+
+        # Show login window immediately — don't wait for cleanup
+        if self.on_logout_cb:
+            self.on_logout_cb()
+
+        # Hide dashboard immediately
+        self.hide()
+
+        # Now do all blocking cleanup in a background thread
+        import threading
+
+        def background_cleanup():
             try:
-                if self.on_logout_cb:
-                    self.on_logout_cb()
-                self.close()
-            except Exception:
-                pass
+                # API logout (blocking network call — safe in background thread)
+                if hasattr(self, 'auth_manager'):
+                    shop_id = self.shopkeeper_data.get('shop_id')
+                    logger.info(f"Triggering API logout for shop_id: {shop_id}")
+                    try:
+                        success, message = self.auth_manager.logout_shopkeeper(shop_id)
+                        if success:
+                            logger.info(f"API logout successful: {message}")
+                        else:
+                            logger.warning(f"API logout failed: {message}")
+                    except Exception as e:
+                        logger.error(f"API logout error: {e}")
+
+                # Stop WebSocket (may block briefly, safe in background)
+                try:
+                    self._stop_websocket_services()
+                    if self.websocket_client:
+                        self.websocket_client = None
+                except Exception as e:
+                    logger.error(f"WebSocket stop error: {e}")
+
+                # Stop printer services (has join timeout, safe in background)
+                try:
+                    self._stop_printer_services()
+                except Exception as e:
+                    logger.error(f"Printer stop error: {e}")
+
+                # Stop background workers (has wait() calls, safe in background)
+                try:
+                    self._stop_background_workers()
+                except Exception as e:
+                    logger.error(f"Worker stop error: {e}")
+
+                logger.info("Background cleanup completed successfully")
+
+            except Exception as e:
+                logger.error(f"Error during background cleanup: {e}")
+            finally:
+                # Schedule window destruction on UI thread after cleanup
+                from PyQt5.QtCore import QTimer
+                QTimer.singleShot(0, self._destroy_window)
+
+        cleanup_thread = threading.Thread(target=background_cleanup, daemon=True)
+        cleanup_thread.start()
+
+    def _destroy_window(self):
+        """Safely destroy the dashboard window after cleanup is complete"""
+        try:
+            logger.info("Destroying dashboard window...")
+            # Disconnect close event to prevent _force_application_quit from running
+            self._is_logout_destroy = True
+            self.close()
+        except Exception as e:
+            logger.error(f"Error destroying window: {e}")    
 
     def stop_job(self, job, ask=True):
         """Stop a queued/printing job (Hardened - FIX 1-5)"""
