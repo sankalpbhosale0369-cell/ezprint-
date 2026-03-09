@@ -36,7 +36,7 @@ EZPRINT_BASE_URL = os.environ.get("EZPRINT_BASE_URL", f"http://{WEB_HOST}:{WEB_P
 UPLOAD_FOLDER = BASE_DIR / "uploads"
 MAX_FILE_SIZE = int(os.environ.get("MAX_FILE_SIZE", str(50 * 1024 * 1024)))  # bytes
 ALLOWED_EXTENSIONS = set((os.environ.get("ALLOWED_EXTENSIONS",
-    'pdf,docx,doc,png,jpg,jpeg,gif,bmp,tiff').split(',')))
+    'pdf,docx,doc,ppt,pptx,png,jpg,jpeg,gif,bmp,tiff').split(',')))
 
 # Print settings
 DEFAULT_PRINTER = None

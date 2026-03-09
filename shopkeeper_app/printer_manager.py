@@ -5,6 +5,8 @@ import win32print
 import win32api
 import win32ui
 import win32con
+import win32gui
+import pywintypes
 import os
 import io
 import logging
@@ -76,6 +78,36 @@ class PrinterManager:
         
         # Add connection event callback
         self.connection_monitor.add_event_callback(self._on_connection_event)
+        
+        # Startup cleanup: remove stale temp files from previous sessions
+        self._cleanup_stale_temp_files()
+    
+    def _cleanup_stale_temp_files(self):
+        """Remove leftover temp print files from previous sessions.
+        Runs once at startup. Never raises — cleanup failure is non-fatal."""
+        try:
+            temp_dir = os.path.join(tempfile.gettempdir(), 'ezprint_downloads')
+            if not os.path.isdir(temp_dir):
+                return
+            
+            import time as _time
+            now = _time.time()
+            stale_threshold = 3600  # 1 hour
+            cleaned = 0
+            
+            for filename in os.listdir(temp_dir):
+                filepath = os.path.join(temp_dir, filename)
+                try:
+                    if os.path.isfile(filepath) and (now - os.path.getmtime(filepath)) > stale_threshold:
+                        os.remove(filepath)
+                        cleaned += 1
+                except Exception:
+                    pass  # Skip files that can't be deleted (locked, etc.)
+            
+            if cleaned > 0:
+                logger.info(f"Startup cleanup: removed {cleaned} stale temp file(s) from {temp_dir}")
+        except Exception as e:
+            logger.warning(f"Startup temp cleanup failed (non-fatal): {e}")
     
     def _ensure_local_file(self, file_path):
         """
@@ -268,7 +300,34 @@ class PrinterManager:
                 except:
                     pass
 
-        # 2. HEURISTIC-BASED DETECTION (Primary for Duplex/Type, Fallback for Color)
+        # ─── Driver-based duplex detection ───
+        # DC_DUPLEX (7) returns > 0 if the printer supports duplex.
+        # This is the AUTHORITATIVE source; the pattern-based result is
+        # used ONLY when the driver call fails (driver_is_duplex stays None).
+        driver_is_duplex = None
+        h_duplex = None
+        try:
+            h_duplex = win32print.OpenPrinter(printer_name)
+            info_duplex = win32print.GetPrinter(h_duplex, 2)
+            port_name = info_duplex.get('pPortName', '')
+            res_duplex = win32print.DeviceCapabilities(
+                printer_name, port_name, 7, None, None
+            )  # 7 = DC_DUPLEX
+            if res_duplex > 0:
+                driver_is_duplex = True
+            else:
+                driver_is_duplex = False
+            logger.info(f"Driver-based duplex detection for '{printer_name}': {driver_is_duplex}")
+        except Exception as e:
+            logger.debug(f"Driver duplex check failed for '{printer_name}': {e}. Falling back to heuristics.")
+        finally:
+            if h_duplex:
+                try:
+                    win32print.ClosePrinter(h_duplex)
+                except:
+                    pass
+
+        # 2. HEURISTIC-BASED DETECTION (Primary for Type, Fallback for Color & Duplex)
         printer_name_upper = printer_name.upper()
         
         # Check against known patterns
@@ -276,14 +335,14 @@ class PrinterManager:
             if pattern.upper() in printer_name_upper:
                 return {
                     "is_color": driver_is_color if driver_is_color is not None else is_color,
-                    "is_duplex": is_duplex,
+                    "is_duplex": driver_is_duplex if driver_is_duplex is not None else is_duplex,
                     "type": printer_type
                 }
         
         # Default fallback: Only if no pattern matches
         return {
             "is_color": driver_is_color if driver_is_color is not None else False,
-            "is_duplex": False,
+            "is_duplex": driver_is_duplex if driver_is_duplex is not None else False,
             "type": "single"
         }
     
@@ -566,7 +625,12 @@ class PrinterManager:
             
             # Start with a copy of canonical raw data
             final_printer = canonical_entry['raw'].copy()
-            final_printer['name'] = canonical_entry['norm_name'] # Use friendly name (Step 5)
+            final_printer['name'] = canonical_entry['raw'].get(
+                'name', canonical_entry['norm_name']
+            )  # Original Windows spooler name — required for all API calls
+            final_printer['display_name'] = canonical_entry['norm_name']
+            # display_name = normalized name for UI only
+            # name         = exact Windows-registered name for win32/SumatraPDF
 
             # 4. Status Resolution (STEP 3 Refined)
             # Merged status: Online if ANY entry in group is Online
@@ -609,12 +673,12 @@ class PrinterManager:
     def _update_printer_status_in_db(self, printer_name: str, is_online: bool):
         """Update printer status in database"""
         try:
-            printer = self.db.query(Printer).filter(Printer.name == printer_name).first()
+            printer = self.db.query(Printer).filter(Printer.printer_name == printer_name).first()
             if printer:
-                printer.is_online = is_online
-                printer.last_seen = datetime.now()
+                printer.is_active = is_online
                 self.db.commit()
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Error updating printer status in DB: {e}")
     
     def cleanup(self):
@@ -854,8 +918,13 @@ class PrinterManager:
         
         # CLOUD FILE SUPPORT: Download cloud-hosted files to local temp directory
         # This ensures backward compatibility - all printing logic expects local files
+        _temp_download_path = None  # Track for cleanup
+        _temp_final_pdf_path = None  # Track for cleanup
+        original_file_path = file_path  # Remember original to detect downloads
         try:
             file_path = self._ensure_local_file(file_path)
+            if file_path != original_file_path:
+                _temp_download_path = file_path  # Mark for cleanup after printing
         except Exception as e:
             error_msg = f"Failed to prepare file for printing: {str(e)}"
             logger.error(error_msg)
@@ -908,6 +977,10 @@ class PrinterManager:
             # relative to the new (subset) PDF and lead to "No pages resolved" failures.
             effective_page_range = None if nup_path != file_path else page_range
             
+            # Track generated PDF for cleanup after printing
+            if nup_path != file_path:
+                _temp_final_pdf_path = nup_path
+            
             # Update file_type if document was converted to PDF
             if nup_path != file_path and nup_path.lower().endswith('.pdf'):
                 logger.info(f"Document processed/converted to PDF for printing: {nup_path}")
@@ -957,11 +1030,36 @@ class PrinterManager:
                         result_holder['msg'] = msg
                     t = threading.Thread(target=_run_sumatra, name="Print-Sumatra", daemon=True)
                     t.start()
-                    t.join(timeout=15)  # non-blocking upper bound
-                    
-                    if result_holder['ok']:
+                    t.join(timeout=30)  # initial wait — 30s for real shop conditions
+
+                    if t.is_alive():
+                        # Sumatra is still running (large PDF / slow network printer)
+                        # Do NOT start GDI — that would cause a double-print
+                        logger.info("SumatraPDF still running after 30s, waiting up to 60s more…")
+                        t.join(timeout=60)  # extended wait
+
+                        if result_holder['ok']:
+                            return True, result_holder['msg']
+
+                        if t.is_alive():
+                            # Sumatra is *still* running after 90s total — let it finish
+                            # in the background (daemon thread) but do NOT layer GDI on top.
+                            logger.warning(
+                                "SumatraPDF still alive after 90s total; "
+                                "skipping GDI fallback to avoid double-print"
+                            )
+                            return False, "SumatraPDF printing timed out (90s)"
+
+                        # Thread finished during extended wait but reported failure
+                        logger.warning(f"SumatraPDF failed after extended wait: {result_holder['msg']}")
+                        # Fall through to GDI below
+
+                    elif result_holder['ok']:
+                        # Finished within initial 30s and succeeded
                         return True, result_holder['msg']
-                    # If timeouts or failure, fall back to GDI
+                    else:
+                        # Finished within 30s but reported failure — fall through to GDI
+                        logger.warning(f"SumatraPDF finished but failed: {result_holder['msg']}")
                 except Exception as e:
                     logger.warning(f"SumatraPDF printing failed, falling back to GDI: {e}")
 
@@ -977,7 +1075,7 @@ class PrinterManager:
             # Move heavy GDI rendering to background thread as well
             result_holder = {'ok': False, 'msg': ''}
             def _run_gdi():
-                ok, msg = self._print_via_gdi_images(nup_path, file_type, copies, effective_page_range, page_size, orientation, color_mode, job_id=job_id, printer_name=target_printer)
+                ok, msg = self._print_via_gdi_images(nup_path, file_type, copies, effective_page_range, page_size, orientation, color_mode, job_id=job_id, printer_name=target_printer, print_side=print_side)
                 result_holder['ok'] = ok
                 result_holder['msg'] = msg
             t = threading.Thread(target=_run_gdi, name="Print-GDI", daemon=True)
@@ -993,6 +1091,15 @@ class PrinterManager:
             error_msg = f"GDI printing failed: {str(e)}"
             logger.error(error_msg)
             raise PrinterError(error_msg)
+        finally:
+            # Cleanup temp files from cloud downloads and generated PDFs
+            for temp_path in (_temp_download_path, _temp_final_pdf_path):
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                        logger.debug(f"Cleaned up temp file: {temp_path}")
+                    except Exception as cleanup_err:
+                        logger.warning(f"Failed to clean up temp file {temp_path}: {cleanup_err}")
 
     def start_job_status_polling(self, job_id, callback):
         """Start polling Windows spooler for job status updates"""
@@ -1020,6 +1127,8 @@ class PrinterManager:
                     job_was_printing = False  # Was job ever in Printing state?
                     consecutive_not_found = 0  # Count consecutive polls where job not found
                     max_consecutive_not_found = 3  # Job must be missing for 3 polls before marking Completed
+                    offline_retries = 0  # Count offline retry attempts
+                    max_offline_retries = 10  # 10 × 30s = 5 min max wait for printer to come back
                     
                     while True:
                         if job_id in self.job_cancel_flags and self.job_cancel_flags[job_id].is_set():
@@ -1151,9 +1260,41 @@ class PrinterManager:
                             callback(job_id, status, progress, f'Pages: {pages_printed}/{total_pages}')
 
                             # Continue polling to wait for job to finish and disappear
-                            if status in ['Failed', 'Offline', 'Paper Out']:
-                                # Error states - stop polling
+                            if status == 'Failed':
+                                # Permanent error — stop polling
                                 return
+                            elif status == 'Paper Out':
+                                # Paper Out — stop polling (handled separately by paper-out banner)
+                                return
+                            elif status == 'Offline':
+                                # Printer went offline mid-job — pause and retry
+                                offline_retries += 1
+                                if offline_retries > max_offline_retries:
+                                    # Exhausted retries (5 min) — mark as Failed
+                                    logger.warning(
+                                        f"Job {job_id}: printer offline for {offline_retries} retries "
+                                        f"({offline_retries * 30}s), marking as Failed"
+                                    )
+                                    callback(
+                                        job_id, 'Failed', progress,
+                                        'Printer offline too long — please check printer and reprint'
+                                    )
+                                    return
+                                # Notify shopkeeper and wait for printer to come back
+                                callback(
+                                    job_id, 'Offline', progress,
+                                    f'Printer offline. Waiting for printer to reconnect... '
+                                    f'(retry {offline_retries}/{max_offline_retries})'
+                                )
+                                logger.info(
+                                    f"Job {job_id}: printer offline, retry {offline_retries}/{max_offline_retries}, "
+                                    f"waiting 30s before re-check"
+                                )
+                                time.sleep(30)  # Pause before retrying
+                                continue  # Resume polling loop
+                            else:
+                                # Non-error status (Printing, In Queue, Paused) — reset offline counter
+                                offline_retries = 0
 
                         # Timeout check
                         if elapsed > timeout_secs:
@@ -1274,7 +1415,7 @@ class PrinterManager:
             logger.error(f"SumatraPDF printing error: {e}")
             return False, f"SumatraPDF printing error: {e}"
 
-    def _print_via_gdi_images(self, path, file_type, copies, page_range, page_size, orientation, color_mode, job_id=None, printer_name=None):
+    def _print_via_gdi_images(self, path, file_type, copies, page_range, page_size, orientation, color_mode, job_id=None, printer_name=None, print_side=None):
         """Rasterize content and print via GDI silently."""
         # Use provided printer_name or fallback to self.current_printer
         target_printer = printer_name or self.current_printer
@@ -1333,6 +1474,13 @@ class PrinterManager:
             hDC.CreatePrinterDC(target_printer)
             printable_area = hDC.GetDeviceCaps(win32con.HORZRES), hDC.GetDeviceCaps(win32con.VERTRES)
             phys_offset = hDC.GetDeviceCaps(win32con.PHYSICALOFFSETX), hDC.GetDeviceCaps(win32con.PHYSICALOFFSETY)
+
+            # Per-job duplex via ResetDC
+            if print_side == "Double":
+                dm = pywintypes.DEVMODEType()
+                dm.Fields = dm.Fields | 0x00001000  # DM_DUPLEX
+                dm.Duplex = win32con.DMDUP_VERTICAL
+                win32gui.ResetDC(hDC.GetHandleOutput(), dm)
 
             # Start document (include job_id to aid cancellation)
             doc_name = f"EzPrint Job" if not job_id else f"EzPrint Job - {job_id}"
@@ -1983,7 +2131,7 @@ class PrinterManager:
 
             # Fallback: Use GDI printing (works with all Windows printers)
             try:
-                ok, msg = self._print_via_gdi_images(nup_path, file_type, copies, page_range, page_size, orientation, color_mode, job_id=job_id, printer_name=target_printer)
+                ok, msg = self._print_via_gdi_images(nup_path, file_type, copies, page_range, page_size, orientation, color_mode, print_side=print_side, job_id=job_id, printer_name=target_printer)
                 return ok, msg
             except Exception as e:
                 error_msg = f"Network printer GDI printing failed: {str(e)}"

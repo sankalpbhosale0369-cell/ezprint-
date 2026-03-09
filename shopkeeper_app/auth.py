@@ -252,9 +252,19 @@ class AuthManager:
         """Close database connection"""
         self.db.close()
 
+    def _resolve_shopkeeper(self, identifier: str):
+        return (
+            self.db.query(Shopkeeper)
+            .filter(
+                (Shopkeeper.username == identifier) |
+                (Shopkeeper.email == identifier)
+            )
+            .first()
+        )
+
     def send_otp_email(self, username):
         try:
-            shopkeeper = self.db.query(Shopkeeper).filter_by(username=username).first()
+            shopkeeper = self._resolve_shopkeeper(username)
             if not shopkeeper:
                 return False, "Username not found"
             
@@ -292,7 +302,7 @@ If you did not request this, please ignore this email.
 
     def verify_otp(self, username, otp):
         try:
-            shopkeeper = self.db.query(Shopkeeper).filter_by(username=username).first()
+            shopkeeper = self._resolve_shopkeeper(username)
             if not shopkeeper:
                 return False, "Username not found"
             if not shopkeeper.otp_code or not shopkeeper.otp_expires_at:
@@ -307,7 +317,7 @@ If you did not request this, please ignore this email.
 
     def reset_password(self, username, new_password):
         try:
-            shopkeeper = self.db.query(Shopkeeper).filter_by(username=username).first()
+            shopkeeper = self._resolve_shopkeeper(username)
             if not shopkeeper:
                 return False, "Username not found"
             shopkeeper.password_hash = self.hash_password(new_password)

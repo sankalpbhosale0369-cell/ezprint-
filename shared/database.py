@@ -2,7 +2,7 @@
 Database models and connection for EzPrint MVP
 """
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, Float
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, Float, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from shared.config import DATABASE_URL
@@ -131,6 +131,20 @@ class ShopPricing(Base):
         self.bw_double = bw_double
         self.color_single = color_single
         self.color_double = color_double
+
+class License(Base):
+    """Device licensing model for trial/activation tracking"""
+    __tablename__ = 'licenses'
+    
+    device_id = Column(String(64), primary_key=True)
+    shop_id = Column(String(36), nullable=True)
+    email = Column(String(255), nullable=True)
+    status = Column(String(20), default='trial')  # trial | active | expired | blocked
+    trial_start = Column(DateTime(timezone=True), default=func.now())
+    trial_end = Column(DateTime(timezone=True))
+    activated_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    notes = Column(Text, nullable=True)
 
 # Database connection with PostgreSQL-optimized settings
 engine = create_engine(

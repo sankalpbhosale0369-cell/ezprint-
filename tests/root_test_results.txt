@@ -1,0 +1,507 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.12.6, pytest-7.4.2, pluggy-1.6.0 -- C:\Users\Asus\AppData\Local\Programs\Python\Python312\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy
+plugins: anyio-4.2.0, cov-7.0.0, mock-3.15.1
+python : Traceback (most 
+recent call last):
+At line:1 char:68
++ ... e - Copy" ; python -m 
+pytest 
+test_crash_chain_fix.py 
+test_db.py test_ ...
++                 ~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~
+    + CategoryInfo           
+   : NotSpecified: (Traceba  
+  ck (most recent call las   
+ t)::String) [], RemoteEx    
+ception
+    + FullyQualifiedErrorId  
+   : NativeCommandError
+ 
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\main.py", line 271, in 
+wrap_session
+    session.exitstatus = 
+doit(config, session) or 0
+                         
+^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\main.py", line 324, in _main
+    config.hook.pytest_collec
+tion(session=session)
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_hooks.py", line 512, in 
+__call__
+    return 
+self._hookexec(self.name, 
+self._hookimpls.copy(), 
+kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_manager.py", line 120, in 
+_hookexec
+    return self._inner_hookex
+ec(hook_name, methods, 
+kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 167, in 
+_multicall
+    raise exception
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 139, in 
+_multicall
+    teardown.throw(exception)
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 53, in 
+run_old_style_hookwrapper
+    return 
+result.get_result()
+           
+^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_result.py", line 103, in 
+get_result
+    raise 
+exc.with_traceback(tb)
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 38, in 
+run_old_style_hookwrapper
+    res = yield
+          ^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 139, in 
+_multicall
+    teardown.throw(exception)
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 53, in 
+run_old_style_hookwrapper
+    return 
+result.get_result()
+           
+^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_result.py", line 103, in 
+get_result
+    raise 
+exc.with_traceback(tb)
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 38, in 
+run_old_style_hookwrapper
+    res = yield
+          ^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 139, in 
+_multicall
+    teardown.throw(exception)
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 53, in 
+run_old_style_hookwrapper
+    return 
+result.get_result()
+           
+^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_result.py", line 103, in 
+get_result
+    raise 
+exc.with_traceback(tb)
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 38, in 
+run_old_style_hookwrapper
+    res = yield
+          ^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 121, in 
+_multicall
+    res = 
+hook_impl.function(*args)
+          
+^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\main.py", line 335, in 
+pytest_collection
+    session.perform_collect()
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\main.py", line 675, in 
+perform_collect
+    self.items.extend(self.ge
+nitems(node))
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\main.py", line 842, in 
+genitems
+    rep = 
+collect_one_node(node)
+          
+^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\runner.py", line 547, in 
+collect_one_node
+    rep: CollectReport = ihoo
+k.pytest_make_collect_report(
+collector=collector)
+                         ^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_hooks.py", line 512, in 
+__call__
+    return 
+self._hookexec(self.name, 
+self._hookimpls.copy(), 
+kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_manager.py", line 120, in 
+_hookexec
+    return self._inner_hookex
+ec(hook_name, methods, 
+kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 167, in 
+_multicall
+    raise exception
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 152, in 
+_multicall
+    teardown.send(result)
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 43, in 
+run_old_style_hookwrapper
+    teardown.send(result)
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\capture.py", line 858, in 
+pytest_make_collect_report
+    out, err = 
+self.read_global_capture()
+               
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\capture.py", line 780, in 
+read_global_capture
+    return self._global_captu
+ring.readouterr()
+           ^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\capture.py", line 684, in 
+readouterr
+    out = self.out.snap() if 
+self.out else ""
+          ^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\capture.py", line 567, in 
+snap
+    self.tmpfile.seek(0)
+ValueError: I/O operation on 
+closed file.
+
+During handling of the above 
+exception, another exception 
+occurred:
+
+Traceback (most recent call 
+last):
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\main.py", line 291, in 
+wrap_session
+    config.notify_exception(e
+xcinfo, config.option)
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\config\__init__.py", line 
+1108, in notify_exception
+    res = self.hook.pytest_in
+ternalerror(excrepr=excrepr, 
+excinfo=excinfo)
+          ^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_hooks.py", line 512, in 
+__call__
+    return 
+self._hookexec(self.name, 
+self._hookimpls.copy(), 
+kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_manager.py", line 120, in 
+_hookexec
+    return self._inner_hookex
+ec(hook_name, methods, 
+kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 167, in 
+_multicall
+    raise exception
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 121, in 
+_multicall
+    res = 
+hook_impl.function(*args)
+          
+^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\capture.py", line 888, in 
+pytest_internalerror
+    
+self.stop_global_capturing()
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\capture.py", line 755, in 
+stop_global_capturing
+    self._global_capturing.po
+p_outerr_to_orig()
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\capture.py", line 637, in 
+pop_outerr_to_orig
+    out, err = 
+self.readouterr()
+               
+^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\capture.py", line 684, in 
+readouterr
+    out = self.out.snap() if 
+self.out else ""
+          ^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\capture.py", line 567, in 
+snap
+    self.tmpfile.seek(0)
+ValueError: I/O operation on 
+closed file.
+
+During handling of the above 
+exception, another exception 
+occurred:
+
+Traceback (most recent call 
+last):
+  File "<frozen runpy>", 
+line 198, in 
+_run_module_as_main
+  File "<frozen runpy>", 
+line 88, in _run_code
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pytest\
+__main__.py", line 5, in 
+<module>
+    raise SystemExit(pytest.c
+onsole_main())
+                     
+^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\config\__init__.py", line 
+192, in console_main
+    code = main()
+           ^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\config\__init__.py", line 
+169, in main
+    ret: Union[ExitCode, 
+int] = config.hook.pytest_cmd
+line_main(
+                             
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_hooks.py", line 512, in 
+__call__
+    return 
+self._hookexec(self.name, 
+self._hookimpls.copy(), 
+kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_manager.py", line 120, in 
+_hookexec
+    return self._inner_hookex
+ec(hook_name, methods, 
+kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^
+collecting ... collected 0 items
+
+============================= 1 warning in 0.01s ==============================
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 167, in 
+_multicall
+    raise exception
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\pluggy\
+_callers.py", line 121, in 
+_multicall
+    res = 
+hook_impl.function(*args)
+          
+^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\main.py", line 318, in 
+pytest_cmdline_main
+    return 
+wrap_session(config, _main)
+           
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\main.py", line 313, in 
+wrap_session
+    
+config._ensure_unconfigure()
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\config\__init__.py", line 
+1062, in _ensure_unconfigure
+    fin()
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\capture.py", line 755, in 
+stop_global_capturing
+    self._global_capturing.po
+p_outerr_to_orig()
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\capture.py", line 637, in 
+pop_outerr_to_orig
+    out, err = 
+self.readouterr()
+               
+^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\capture.py", line 684, in 
+readouterr
+    out = self.out.snap() if 
+self.out else ""
+          ^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData
+\Local\Programs\Python\Python
+312\Lib\site-packages\_pytest
+\capture.py", line 567, in 
+snap
+    self.tmpfile.seek(0)
+ValueError: I/O operation on 
+closed file.

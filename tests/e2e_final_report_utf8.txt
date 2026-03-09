@@ -1,0 +1,161 @@
+﻿Starting full E2E load test...
+Cloudinary Cloud Name: dlimcfiru
+Running Scenario 1: Multiple Customers Uploading...
+Running Scenario 2: Shopkeeper Auth...
+Running Scenario 3: Print Job Dashboard Flow...
+Running Scenario 4: Printer Simulation...
+Running Scenario 5: Stress Test...
+Running Scenario 6: Edge Cases...
+
+==================================================
+FINAL REPORT
+==================================================
+
+SCENARIO 1:
+  [PASS] Customer 7 uploaded PRINT job fd629b08-e048-47f7-a61a-6c90f3ab2b50
+  [PASS] Customer 5 uploaded PRINT job fd629b08-e048-47f7-a61a-6c90f3ab2b50
+  [PASS] Customer 0 uploaded PRINT job fd629b08-e048-47f7-a61a-6c90f3ab2b50
+  [PASS] Customer 4 uploaded PRINT job fd629b08-e048-47f7-a61a-6c90f3ab2b50
+  [PASS] Customer 2 uploaded PRINT job fd629b08-e048-47f7-a61a-6c90f3ab2b50
+  [PASS] Customer 6 uploaded PRINT job d856cbd7-f7a2-4a89-a4ae-b56c2bd89c49
+  [PASS] Customer 8 uploaded PRINT job 23d451e4-acc2-4cf9-8167-56f7bd8afc91
+  [PASS] Customer 3 uploaded PRINT job 23d451e4-acc2-4cf9-8167-56f7bd8afc91
+  [PASS] Customer 9 uploaded PRINT job 23d451e4-acc2-4cf9-8167-56f7bd8afc91
+  [PASS] Customer 1 uploaded PRINT job 23d451e4-acc2-4cf9-8167-56f7bd8afc91
+  [PASS] Corrupted file handled gracefully for customer 6 (Status: 200)
+  [PASS] Corrupted file handled gracefully for customer 0 (Status: 200)
+  [PASS] Corrupted file handled gracefully for customer 7 (Status: 200)
+  [PASS] Corrupted file handled gracefully for customer 5 (Status: 200)
+  [PASS] Corrupted file handled gracefully for customer 4 (Status: 200)
+  [PASS] Corrupted file handled gracefully for customer 3 (Status: 200)
+  [PASS] Corrupted file handled gracefully for customer 2 (Status: 200)
+  [PASS] Corrupted file handled gracefully for customer 8 (Status: 200)
+  [PASS] Corrupted file handled gracefully for customer 9 (Status: 200)
+  [PASS] Corrupted file handled gracefully for customer 1 (Status: 200)
+  [FAIL] Customer 5 failed to upload XEROX job
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Customer 0 failed to upload XEROX job
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Customer 2 failed to upload XEROX job
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Customer 7 failed to upload XEROX job
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Customer 4 failed to upload XEROX job
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Customer 8 failed to upload XEROX job
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Customer 6 failed to upload XEROX job
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Customer 3 failed to upload XEROX job
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Customer 9 failed to upload XEROX job
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Customer 1 failed to upload XEROX job
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Double-click dedup failed for customer 5 (created 40bbf16a-22a1-4bd0-9fa9-effbf0897f0c and cf5b5c33-5c55-48cf-a934-55d8dbd71f26)
+         Suggested Fix: web_interface/app.py (upload_file dedup logic)
+  [FAIL] Double-click dedup failed for customer 0 (created 7a39e9fc-3b12-43e9-b773-a4cccf09cd9b and 802f381e-8b19-47b6-b76d-f5c643a6f641)
+         Suggested Fix: web_interface/app.py (upload_file dedup logic)
+  [FAIL] Double-click dedup failed for customer 4 (created ff124e27-3722-4e90-bf0d-828ed73e46ee and 01dfbcc3-0f50-408c-b0c4-043349c50a88)
+         Suggested Fix: web_interface/app.py (upload_file dedup logic)
+  [FAIL] Double-click dedup failed for customer 3 (created e553b986-3c28-4905-8af4-c2cbc5e1e1f7 and 93da0a77-7251-4e36-86af-973e02eaf43f)
+         Suggested Fix: web_interface/app.py (upload_file dedup logic)
+  [FAIL] Double-click dedup failed for customer 6 (created 51936fd1-31cc-4bf8-9a17-cc21acd3fe84 and f266221a-507a-415f-a028-d71d969fa7eb)
+         Suggested Fix: web_interface/app.py (upload_file dedup logic)
+  [FAIL] Double-click dedup failed for customer 2 (created d3bfe59f-a6ed-4a09-b300-ee98b6d3e174 and de786efb-8e20-462d-ad8e-a63ad2a7286e)
+         Suggested Fix: web_interface/app.py (upload_file dedup logic)
+  [FAIL] Double-click dedup failed for customer 8 (created 3a15d71e-0d50-4444-b0b5-b1bf527550da and fae0bb14-5a96-43b7-a55f-1cef3091cb7f)
+         Suggested Fix: web_interface/app.py (upload_file dedup logic)
+  [FAIL] Double-click dedup failed for customer 7 (created 1ebfd772-6614-4cab-973b-1fc1b24a1896 and 47d381e1-d482-4de9-895c-93ec8752f176)
+         Suggested Fix: web_interface/app.py (upload_file dedup logic)
+  [FAIL] Double-click dedup failed for customer 9 (created 1f6c0e2b-cef9-4dbd-9f80-9d63772a439c and 2e9ba621-5730-4601-9dda-df6fe0954f2b)
+         Suggested Fix: web_interface/app.py (upload_file dedup logic)
+  [FAIL] Double-click dedup failed for customer 1 (created cd8cfac1-d760-45ec-8663-4e149a6d2521 and e3b800b4-f8b3-4d39-9ab8-dff42e2d4a9f)
+         Suggested Fix: web_interface/app.py (upload_file dedup logic)
+  [FAIL] Oversized filename caused error for customer 4
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Oversized filename caused error for customer 6
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Oversized filename caused error for customer 0
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Oversized filename caused error for customer 2
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Oversized filename caused error for customer 5
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Oversized filename caused error for customer 7
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Oversized filename caused error for customer 3
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Oversized filename caused error for customer 8
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Oversized filename caused error for customer 1
+         Endpoint: /api/upload
+         Response: Connection error
+  [FAIL] Oversized filename caused error for customer 9
+         Endpoint: /api/upload
+         Response: Connection error
+
+SCENARIO 2:
+  [FAIL] Shopkeeper 0 registration failed completely
+  [FAIL] Shopkeeper 1 registration failed completely
+  [FAIL] Shopkeeper 2 registration failed completely
+
+SCENARIO 3:
+  [PASS] Fetched 20 pending jobs
+  [FAIL] Job status update API missing/failing for In Queue
+         Endpoint: /api/jobs/fd629b08-e048-47f7-a61a-6c90f3ab2b50/status
+         Suggested Fix: web_interface/api/jobs.py (Implement status update)
+  [FAIL] Pickup API missing/failing
+         Endpoint: /api/jobs/{job_id}/pickup
+  [FAIL] Cancel API missing/failing
+         Endpoint: /api/jobs/{job_id}/cancel
+  [FAIL] Reprint API missing/failing
+         Endpoint: /api/jobs/{job_id}/reprint
+
+SCENARIO 4:
+  [FAIL] Printer registration API missing
+         Endpoint: /api/shop/printers
+         Suggested Fix: web_interface/api/config.py (Add /printers POST)
+  [FAIL] Set default printer API missing
+         Endpoint: /api/shop/printers/id/default
+  [FAIL] Printer status update API missing
+         Endpoint: /api/shop/printers/id/status
+
+SCENARIO 5:
+  [PASS] Stress test complete, server remains healthy
+
+SCENARIO 6:
+  [FAIL] Empty file upload NOT handled correctly
+         Response: Err
+  [FAIL] Non-PDF file upload NOT handled correctly
+         Response: Err
+  [FAIL] Non-existent job NOT returning 404
+         Response: Err
+
+=========================
+Total Scenarios: 6
+Passed: 22
+Failed: 43
+Crashes detected: 0
+Warnings: 7
+=========================
+
+Cleaning up test data...

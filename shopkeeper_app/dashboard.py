@@ -857,7 +857,8 @@ class ConnectPrintersDialog(QDialog):
         card = QFrame()
         card.setFrameStyle(QFrame.StyledPanel)
         
-        printer_name = printer_info['name']
+        printer_name = printer_info['name']  # Original spooler name for API/DB calls
+        printer_display_name = printer_info.get('display_name', printer_name)  # Friendly name for UI
         is_connected = printer_name in active_printers
         is_default = printer_name == default_printer
         status = printer_info.get('status', 'Unknown')
@@ -913,7 +914,7 @@ class ConnectPrintersDialog(QDialog):
         info_layout.setSpacing(4)
         
         # Printer name
-        name_label = QLabel(printer_name)
+        name_label = QLabel(printer_display_name)
         name_label.setFont(QFont("Segoe UI", 12, QFont.Bold))
         name_label.setStyleSheet("color: #111827;")
         info_layout.addWidget(name_label)
@@ -1683,6 +1684,7 @@ class JobPopupDialog(QDialog):
         
         # 2 Instance Variables for Routing Metadata (Objective 2)
         self.routed_printer_name = None
+        self.routed_printer_display_name = None  # Friendly display name for UI
         self.routing_error_message = None
         self.printer_status = "Online"  # Track real-time status (Offline Warning Requirement)
         
@@ -1702,6 +1704,7 @@ class JobPopupDialog(QDialog):
                     printer_info = next((p for p in available_printers_raw if p.get('name') == self.routed_printer_name), None)
                     if printer_info:
                         self.printer_status = printer_info.get('status', 'Online')
+                        self.routed_printer_display_name = printer_info.get('display_name', self.routed_printer_name)
             except Exception as e:
                 logger.warning(f"Initial routing check failed for Popup: {e}")
         
@@ -1928,7 +1931,8 @@ class JobPopupDialog(QDialog):
             """)
         else:
             # Show routed printer name (Objective 1)
-            p_display = self.routed_printer_name or "System Default"
+            # Use display_name if available for UI; routed_printer_name may be spooler name
+            p_display = self.routed_printer_display_name or self.routed_printer_name or "System Default"
             self.printer_label.setText(f"Printer: {p_display}")
             self.printer_label.setStyleSheet("""
                 font-weight: 700;
@@ -2693,6 +2697,12 @@ class DashboardWindow(QMainWindow):
                         self.printer_manager.current_printer = actives[0]
         except Exception:
             pass
+        # ── Startup job recovery ──────────────────────────────────────
+        # Recover jobs left in transient states by a prior crash/close.
+        # Must run BEFORE load_print_jobs() and setup_timer() so the
+        # spooler monitor never picks up these stale jobs.
+        self._recover_interrupted_jobs()
+
         QTimer.singleShot(0, self.load_print_jobs)
         self.setup_timer()
         self.setup_polling_timer()  # Setup fallback polling
@@ -2733,6 +2743,61 @@ class DashboardWindow(QMainWindow):
             logger.error(error_msg)
             QMessageBox.critical(self, "Database Error", error_msg)
             return None
+
+    def _recover_interrupted_jobs(self):
+        """Recover jobs left in transient states by a prior crash or unexpected close.
+
+        Runs once at startup, BEFORE the spooler monitor begins polling.
+        Any job still marked as 'In Queue', 'Printing Started', 'Processing',
+        or 'Printing' cannot realistically be in the Windows spooler any more,
+        so we mark them 'Failed' with a clear error_message and alert the
+        shopkeeper.
+        """
+        STALE_STATUSES = ['In Queue', 'Printing Started', 'Processing', 'Printing']
+        try:
+            stale_jobs = self.db.query(PrintJob).filter(
+                PrintJob.shop_id == self.shopkeeper_data['shop_id'],
+                PrintJob.status.in_(STALE_STATUSES)
+            ).all()
+
+            if not stale_jobs:
+                return  # Nothing to recover
+
+            # Mark each stale job as Failed with a descriptive message
+            recovered_names = []
+            for job in stale_jobs:
+                old_status = job.status
+                job.status = 'Failed'
+                job.error_message = (
+                    f'Interrupted - app closed while job was "{old_status}". '
+                    f'Please verify at the printer before reprinting.'
+                )
+                recovered_names.append(
+                    f"  - {job.filename or job.job_id[:8]}  (was: {old_status})"
+                )
+                logger.warning(
+                    f"Startup recovery: job {job.job_id} "
+                    f"changed from '{old_status}' to 'Failed' (interrupted)"
+                )
+
+            self.db.commit()
+
+            # Show a visible warning so the shopkeeper knows
+            count = len(recovered_names)
+            details = "\n".join(recovered_names)
+            QMessageBox.warning(
+                self,
+                "Interrupted Jobs Detected",
+                f"{count} job(s) were interrupted by an unexpected shutdown.\n"
+                f"They have been marked as Failed.\n\n"
+                f"{details}\n\n"
+                f"Please check the printer output before reprinting."
+            )
+            logger.info(f"Startup recovery complete: {count} job(s) marked as Failed")
+
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Startup job recovery failed: {e}")
 
     def bulk_delete_jobs(self, job_ids):
         """Delete multiple jobs safely, cleaning up Cloudinary assets as needed."""
@@ -3355,6 +3420,24 @@ class DashboardWindow(QMainWindow):
                         logger.error(f"Error bridging status to popup: {e}")
 
             logger.info(f"Successfully updated UI for job {job_id[:8]} -> {new_status}")
+
+            # 4. DB write — runs on main thread (same session as on_job_completed/on_job_failed)
+            # This is the ONLY place report_job_status updates the DB, avoiding the
+            # race condition where a background-thread SessionLocal() and main-thread
+            # self.db wrote to the same PrintJob row concurrently.
+            try:
+                job_in_db = self.db.query(PrintJob).filter(PrintJob.job_id == job_id).first()
+                if job_in_db:
+                    job_in_db.status = new_status
+                    if new_status == 'Completed':
+                        job_in_db.completed_at = datetime.utcnow()
+                    elif new_status == 'Failed':
+                        job_in_db.error_message = details or ''
+                    self.db.commit()
+                    logger.debug(f"DB updated for job {job_id[:8]} -> {new_status} (main thread)")
+            except Exception as db_err:
+                self.db.rollback()
+                logger.error(f"Failed to update job status in DB (main thread): {db_err}")
             
         except Exception as e:
             logger.error(f"Error updating job status in UI: {e}")
@@ -7659,10 +7742,15 @@ class DashboardWindow(QMainWindow):
                 self.job_printer_combo.addItem("No printers connected")
                 return
             
+            # Get available printers to look up display_name for UI
+            available_printers_raw = self.printer_manager.get_available_printers()
+            display_name_map = {p.get('name'): p.get('display_name', p.get('name')) for p in available_printers_raw if p.get('name')}
+            
             for printer_name in active_names:
-                display_name = f"{printer_name}"
+                friendly_name = display_name_map.get(printer_name, printer_name)
+                display_name = f"{friendly_name}"
                 if printer_name == default_name:
-                    display_name = f"{printer_name} (Default)"
+                    display_name = f"{friendly_name} (Default)"
                 self.job_printer_combo.addItem(display_name, printer_name)
                 # Set tooltip with full name
                 idx = self.job_printer_combo.count() - 1
@@ -8947,13 +9035,23 @@ class DashboardWindow(QMainWindow):
                     # Start polling for this job
                     self.printer_manager.start_job_status_polling(self.job_id, status_callback)
                     
-                    ok, msg = self.printer_manager.print_document_with_settings(self.file_path, self.file_type, self.settings, job_id=self.job_id)
+                    result = self.printer_manager.print_document_with_settings(self.file_path, self.file_type, self.settings, job_id=self.job_id)
+                    # FIX 3: Guard against None / non-tuple return from @safe_printer_action
+                    if result is None or not isinstance(result, (tuple, list)):
+                        ok, msg = False, "Print pipeline returned no result (internal error)"
+                    else:
+                        ok, msg = result[0], result[1] if len(result) > 1 else "Unknown error"
                     # Do not mark completed immediately; rely on poller callback.
                     # If the print call itself fails, emit failure now.
                     if not ok:
                         self.job_failed.emit(self.job_id, msg)
                 except Exception as e:
-                    self.job_failed.emit(self.job_id, str(e))
+                    # Outer safety net — replaces missing @safe_thread_action on overridden run()
+                    logger.error(f"_SettingsPrintWorker unhandled exception for job {self.job_id}: {e}")
+                    try:
+                        self.job_failed.emit(self.job_id, f"Print worker error: {str(e)}")
+                    except Exception:
+                        logger.error(f"CRITICAL: Could not emit job_failed for {self.job_id}: {e}")
 
         worker = _SettingsPrintWorker(self, job.job_id, job.file_path, job.file_type, settings, self.printer_manager, self.websocket_client)
         worker.job_completed.connect(self.on_job_completed)
@@ -8986,6 +9084,7 @@ class DashboardWindow(QMainWindow):
             self.load_print_jobs()
             
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Error handling job completion: {e}")
     
     def on_job_failed(self, job_id, error_message):
@@ -9011,6 +9110,7 @@ class DashboardWindow(QMainWindow):
             self.load_print_jobs()
             
         except Exception as e:
+            self.db.rollback()
             logger.error(f"Error handling job failure: {e}")
     
     def manual_refresh(self):
@@ -9516,28 +9616,16 @@ class DashboardWindow(QMainWindow):
                     printer_name=printer_name
                 )
             
-            # 2. Local Fallback: Update DB if WS failed or explicitly needed
-            # We always update local DB for now to maintain backward compatibility 
-            # and local offline capability, but we mark it as fallback if WS failed.
+            # 2. DB write is NOT done here — this method runs on a background
+            # poller thread, and creating a separate SessionLocal() races with
+            # self.db writes on the main thread (on_job_completed / on_job_failed).
+            # Instead, we defer the DB write to update_job_status_in_ui() which
+            # runs on the main thread via thread_safe_signal, serializing all
+            # PrintJob row writes through self.db.
             if not ws_success:
-                logger.info(f"Using local DB as primary authority (WS disconnected) for job {job_id} -> {status}")
+                logger.info(f"WS disconnected for job {job_id} -> {status}; DB write deferred to main thread")
             
-            try:
-                db = SessionLocal()
-                # Use a fresh query within this thread
-                job_in_db = db.query(PrintJob).filter(PrintJob.job_id == job_id).first()
-                if job_in_db:
-                    job_in_db.status = status
-                    if status == 'Completed':
-                        job_in_db.completed_at = datetime.utcnow()
-                    elif status == 'Failed':
-                        job_in_db.error_message = details
-                    db.commit()
-                db.close()
-            except Exception as db_err:
-                logger.error(f"Failed local DB fallback for job status update: {db_err}")
-            
-            # 3. UI Update (Always local/immediate)
+            # 3. UI Update + DB write (deferred to main thread via signal)
             self.thread_safe_signal.emit("update_job_status", (job_id, status, progress, details))
             
         except Exception as e:

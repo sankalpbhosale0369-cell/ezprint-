@@ -1,0 +1,57 @@
+STDOUT:
+Cloudinary Cloud Name: dlimcfiru
+
+--- Setup ---
+  Created job 3e439913  status='In Queue'
+  Created job 9bd2ce44  status='Printing Started'
+  Created job de430d03  status='Processing'
+  Created job 2b64cf42  status='Printing'
+  Created job e001360d  status='Pending'
+  Created job 8c225e03  status='Completed'
+  Created job af35c301  status='Failed'
+  Created job a40954a8  status='Cancelled'
+  Total: 4 transient + 4 safe = 8 jobs
+
+TEST 1: Transient jobs are marked Failed with descriptive message
+  [PASS] Recovery returned correct count  (count=4)
+  [PASS] Job 3e439913 status is Failed  (status='Failed')
+  [PASS] Job 3e439913 has 'Interrupted' in error_message  (error_message='Interrupted - app closed while job was "In Queue". Please ve...')
+  [PASS] Job 9bd2ce44 status is Failed  (status='Failed')
+  [PASS] Job 9bd2ce44 has 'Interrupted' in error_message  (error_message='Interrupted - app closed while job was "Printing Started". P...')
+  [PASS] Job de430d03 status is Failed  (status='Failed')
+  [PASS] Job de430d03 has 'Interrupted' in error_message  (error_message='Interrupted - app closed while job was "Processing". Please ...')
+  [PASS] Job 2b64cf42 status is Failed  (status='Failed')
+  [PASS] Job 2b64cf42 has 'Interrupted' in error_message  (error_message='Interrupted - app closed while job was "Printing". Please ve...')
+
+TEST 2: Non-transient jobs are NOT modified
+  [PASS] Job e001360d still 'Pending'  (status='Pending')
+  [PASS] Job 8c225e03 still 'Completed'  (status='Completed')
+  [PASS] Job af35c301 still 'Failed'  (status='Failed')
+  [PASS] Job a40954a8 still 'Cancelled'  (status='Cancelled')
+
+TEST 3: Running recovery again with no transient jobs -> no-op
+  [PASS] Second recovery is a no-op  (count=0)
+
+TEST 4: DB error during recovery -> rollback, no crash
+  [PASS] No crash on DB error
+  [PASS] Recovery returned error sentinel  (count=-1)
+  [PASS] Job still 'In Queue' after rollback  (status='In Queue')
+  [PASS] Session still usable
+
+Cleaning up test data...
+  Cleanup OK
+
+==================================================
+Results: 18/18 passed, 0/18 failed
+OK - All tests passed
+==================================================
+
+STDERR:
+WARNING:__main__:Startup recovery: job 3e439913-f215-4356-9422-bbc28d9464f6 changed from 'In Queue' to 'Failed' (interrupted)
+WARNING:__main__:Startup recovery: job 9bd2ce44-9705-4e48-adaa-881f74fccb35 changed from 'Printing Started' to 'Failed' (interrupted)
+WARNING:__main__:Startup recovery: job de430d03-f5cc-42e6-bf5f-454dbbcd9cf3 changed from 'Processing' to 'Failed' (interrupted)
+WARNING:__main__:Startup recovery: job 2b64cf42-f88e-4a69-9aab-efe9f94ae394 changed from 'Printing' to 'Failed' (interrupted)
+WARNING:__main__:Startup recovery: job bbddf304-11d7-4403-9a88-f700de696116 changed from 'In Queue' to 'Failed' (interrupted)
+ERROR:__main__:Startup job recovery failed: Simulated DB failure
+
+EXIT CODE: 0

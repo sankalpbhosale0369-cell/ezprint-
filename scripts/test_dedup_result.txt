@@ -1,0 +1,44 @@
+STDOUT:
+Cloudinary Cloud Name: dlimcfiru
+
+--- Setup ---
+  Shop A: test-dedup-A-a56589a5
+  Shop B: test-dedup-B-0206e9e7
+
+TEST 1: Two identical jobs within 10s -> second is blocked
+  [PASS] Duplicate detected
+  [PASS] Returns original job_id  (original=3b9cb6dc, found=3b9cb6dc)
+
+TEST 2: Same file after 10s window -> allowed (not a duplicate)
+  [PASS] Old job NOT flagged as duplicate  (found=None)
+
+TEST 3: Same shop, different filename -> allowed
+  [PASS] Different filename not blocked
+
+TEST 4: Same filename, different shop -> allowed
+  [PASS] Different shop not blocked
+
+TEST 5: Same filename+shop, different file_size -> allowed
+  [PASS] Different size not blocked
+
+TEST 6: UI-side _uploadInFlight guard exists in upload.js
+  [PASS] _uploadInFlight variable declared
+  [PASS] Guard check in PRINT handler
+  [PASS] Flag set to true in both flows  (found 2 set-to-true occurrences)
+  [PASS] Flag reset in finally blocks  (found 2 reset-to-false occurrences)
+
+Cleaning up test data...
+  Cleanup OK
+
+==================================================
+Results: 10/10 passed, 0/10 failed
+OK - All tests passed
+==================================================
+
+STDERR:
+C:\Users\Asus\Desktop\EzPrint\scripts\test_duplicate_upload.py:66: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  dedup_cutoff = datetime.utcnow() - timedelta(seconds=10)
+C:\Users\Asus\Desktop\EzPrint\scripts\test_duplicate_upload.py:96: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(seconds=15))
+
+EXIT CODE: 0

@@ -1,0 +1,170 @@
+Cloudinary Cloud Name: dlimcfiru
+
+============================================================
+PART 1 SUMMARY: 44/72 passed, 0 failed, 0 errors, 28 skipped
+============================================================
+
+---STDERR---
+test_tc001_scan_qr_lands_upload_page (__main__.TestCustomerHappyPath.test_tc001_scan_qr_lands_upload_page)
+TC001: Customer scans QR -> lands on upload page ... skipped 'Web server not running'
+test_tc002_select_print_flow (__main__.TestCustomerHappyPath.test_tc002_select_print_flow)
+TC002: Upload page contains PRINT flow option ... skipped 'Web server not running'
+test_tc003_select_xerox_flow (__main__.TestCustomerHappyPath.test_tc003_select_xerox_flow)
+TC003: Upload page contains XEROX flow option ... skipped 'Web server not running'
+test_tc004_upload_pdf_success (__main__.TestCustomerHappyPath.test_tc004_upload_pdf_success)
+TC004: Customer uploads PDF successfully ... skipped 'Web server not running'
+test_tc005_upload_docx_success (__main__.TestCustomerHappyPath.test_tc005_upload_docx_success)
+TC005: Customer uploads DOCX — accepted by extension check ... skipped 'Web server not running'
+test_tc006_upload_png_jpg (__main__.TestCustomerHappyPath.test_tc006_upload_png_jpg)
+TC006: Customer uploads PNG/JPG ... skipped 'Web server not running'
+test_tc007_upload_ppt (__main__.TestCustomerHappyPath.test_tc007_upload_ppt)
+TC007: Customer uploads PPT — accepted by extension ... skipped 'Web server not running'
+test_tc008_single_side_print_setting (__main__.TestCustomerHappyPath.test_tc008_single_side_print_setting)
+TC008: Customer selects single side — stored correctly ... ok
+test_tc009_double_side_print_setting (__main__.TestCustomerHappyPath.test_tc009_double_side_print_setting)
+TC009: Customer selects double side — stored correctly ... ok
+test_tc010_bw_print (__main__.TestCustomerHappyPath.test_tc010_bw_print)
+TC010: Customer selects B&W print ... ok
+test_tc011_color_print (__main__.TestCustomerHappyPath.test_tc011_color_print)
+TC011: Customer selects color print ... ok
+test_tc012_page_range (__main__.TestCustomerHappyPath.test_tc012_page_range)
+TC012: Customer selects page range 1-5 ... ok
+test_tc013_specific_pages (__main__.TestCustomerHappyPath.test_tc013_specific_pages)
+TC013: Customer selects specific pages 1,3,5 ... ok
+test_tc014_single_copy (__main__.TestCustomerHappyPath.test_tc014_single_copy)
+TC014: Customer selects 1 copy ... ok
+test_tc015_multiple_copies (__main__.TestCustomerHappyPath.test_tc015_multiple_copies)
+TC015: Customer selects multiple copies (3, 5, 10) ... ok
+test_tc016_preview_endpoint_exists (__main__.TestCustomerHappyPath.test_tc016_preview_endpoint_exists)
+TC016: Preview endpoint is reachable ... skipped 'Web server not running'
+test_tc017_submit_print_job (__main__.TestCustomerHappyPath.test_tc017_submit_print_job)
+TC017: Customer submits print job — record created ... ok
+test_tc018_job_id_assigned (__main__.TestCustomerHappyPath.test_tc018_job_id_assigned)
+TC018: Customer receives job_id (UUID format) ... ok
+test_tc019_track_job_status (__main__.TestCustomerHappyPath.test_tc019_track_job_status)
+TC019: Customer tracks job status via API ... skipped 'Web server not running'
+test_tc020_completed_status (__main__.TestCustomerHappyPath.test_tc020_completed_status)
+TC020: Job completed status is stored ... C:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\tests\test_enterprise_part1.py:280: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  j.status = "Completed"; j.completed_at = datetime.utcnow()
+ok
+test_tc021_confirm_pickup (__main__.TestCustomerHappyPath.test_tc021_confirm_pickup)
+TC021: Completed job can be marked — status stays Completed ... ok
+test_tc022_dedup_same_file_twice (__main__.TestCustomerHappyPath.test_tc022_dedup_same_file_twice)
+TC022: Uploading same file twice within 10s returns existing job ... C:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\tests\test_enterprise_part1.py:301: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  PrintJob.created_at >= datetime.utcnow() - timedelta(seconds=10)
+ok
+test_tc023_xerox_a4_size (__main__.TestCustomerHappyPath.test_tc023_xerox_a4_size)
+TC023: XEROX customer selects A4 size ... ok
+test_tc024_xerox_binding_option (__main__.TestCustomerHappyPath.test_tc024_xerox_binding_option)
+TC024: XEROX customer selects double-side (binding) ... ok
+test_tc025_e2e_print_flow (__main__.TestCustomerHappyPath.test_tc025_e2e_print_flow)
+TC025: Complete end-to-end PRINT flow — upload page + API ... skipped 'Web server not running'
+test_tc026_e2e_xerox_flow (__main__.TestCustomerHappyPath.test_tc026_e2e_xerox_flow)
+TC026: Complete end-to-end XEROX flow — upload page available ... skipped 'Web server not running'
+test_tc027_app_health (__main__.TestShopkeeperHappyPath.test_tc027_app_health)
+TC027: App launches — health endpoint OK ... skipped 'Web server not running'
+test_tc028_login_username (__main__.TestShopkeeperHappyPath.test_tc028_login_username)
+TC028: Shopkeeper logs in with username ... skipped 'Web server not running'
+test_tc029_login_email (__main__.TestShopkeeperHappyPath.test_tc029_login_email)
+TC029: Shopkeeper logs in with email ... skipped 'Web server not running'
+test_tc030_dashboard_loads (__main__.TestShopkeeperHappyPath.test_tc030_dashboard_loads)
+TC030: Shopkeeper dashboard loads with job list ... skipped 'Web server not running'
+test_tc031_new_job_creates_pending (__main__.TestShopkeeperHappyPath.test_tc031_new_job_creates_pending)
+TC031: New job arrives as Pending ... ok
+test_tc032_tc033_print_manual_auto (__main__.TestShopkeeperHappyPath.test_tc032_tc033_print_manual_auto)
+TC032-TC033: Print job status can move to Printing ... C:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\tests\test_enterprise_part1.py:424: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  j.status = "Printing"; j.started_at = datetime.utcnow()
+ok
+test_tc035_confirm_printed (__main__.TestShopkeeperHappyPath.test_tc035_confirm_printed)
+TC035: Shopkeeper confirms job printed — Completed ... C:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\tests\test_enterprise_part1.py:433: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  j.status = "Completed"; j.completed_at = datetime.utcnow()
+ok
+test_tc036_mark_picked_up (__main__.TestShopkeeperHappyPath.test_tc036_mark_picked_up)
+TC036: Completed job stays Completed (picked up) ... ok
+test_tc037_cancel_job (__main__.TestShopkeeperHappyPath.test_tc037_cancel_job)
+TC037: Shopkeeper cancels a job ... ok
+test_tc038_reprint_completed_job (__main__.TestShopkeeperHappyPath.test_tc038_reprint_completed_job)
+TC038: Completed job can be reprinted (new job) ... ok
+test_tc039_tc040_printer_model (__main__.TestShopkeeperHappyPath.test_tc039_tc040_printer_model)
+TC039-TC040: Printer records can be created (USB/WiFi) ... ok
+test_tc041_set_default_printer (__main__.TestShopkeeperHappyPath.test_tc041_set_default_printer)
+TC041: Set default printer ... ok
+test_tc042_tc043_pricing_view_update (__main__.TestShopkeeperHappyPath.test_tc042_tc043_pricing_view_update)
+TC042-TC043: View and update pricing ... skipped 'Web server not running'
+test_tc044_payment_history (__main__.TestShopkeeperHappyPath.test_tc044_payment_history)
+TC044: Completed jobs with amounts exist ... ok
+test_tc045_qr_code_path (__main__.TestShopkeeperHappyPath.test_tc045_qr_code_path)
+TC045: Shop has qr_code_path field ... ok
+test_tc046_tc047_profile_update (__main__.TestShopkeeperHappyPath.test_tc046_tc047_profile_update)
+TC046-TC047: View and update shop name via config ... skipped 'Web server not running'
+test_tc048_auto_manual_mode_field (__main__.TestShopkeeperHappyPath.test_tc048_auto_manual_mode_field)
+TC048: Auto/manual mode is a client-side toggle (no DB crash) ... ok
+test_tc049_tc050_bulk_select_cancel (__main__.TestShopkeeperHappyPath.test_tc049_tc050_bulk_select_cancel)
+TC049-TC050: Bulk select and cancel jobs ... ok
+test_tc051_filter_by_status (__main__.TestShopkeeperHappyPath.test_tc051_filter_by_status)
+TC051: Filter jobs by status ... ok
+test_tc052_filter_by_date (__main__.TestShopkeeperHappyPath.test_tc052_filter_by_date)
+TC052: Filter jobs by date (today) ... C:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\tests\test_enterprise_part1.py:557: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  today_start = datetime.utcnow().replace(hour=0, minute=0, second=0)
+ok
+test_tc053_search_by_filename (__main__.TestShopkeeperHappyPath.test_tc053_search_by_filename)
+TC053: Search jobs by filename ... ok
+test_tc054_empty_file (__main__.TestCustomerEdgeCases.test_tc054_empty_file)
+TC054: 0-byte empty file rejected ... skipped 'Web server not running'
+test_tc055_unsupported_exe (__main__.TestCustomerEdgeCases.test_tc055_unsupported_exe)
+TC055: .exe file type rejected ... skipped 'Web server not running'
+test_tc056_corrupted_pdf (__main__.TestCustomerEdgeCases.test_tc056_corrupted_pdf)
+TC056: Corrupted PDF — server handles gracefully ... skipped 'Web server not running'
+test_tc057_password_protected_pdf (__main__.TestCustomerEdgeCases.test_tc057_password_protected_pdf)
+TC057: Password-protected PDF — parse_page_range still works ... ok
+test_tc058_long_filename (__main__.TestCustomerEdgeCases.test_tc058_long_filename)
+TC058: 500-char filename stored (truncated by DB VARCHAR) ... ok
+test_tc059_file_over_50mb (__main__.TestCustomerEdgeCases.test_tc059_file_over_50mb)
+TC059: File >50MB rejected by MAX_CONTENT_LENGTH ... skipped 'Web server not running'
+test_tc060_page_range_exceeding (__main__.TestCustomerEdgeCases.test_tc060_page_range_exceeding)
+TC060: Page range 1-999 on 5-page doc returns only valid pages ... ok
+test_tc061_invalid_page_range_abc (__main__.TestCustomerEdgeCases.test_tc061_invalid_page_range_abc)
+TC061: Page range 'abc' raises ValueError ... ok
+test_tc062_zero_copies (__main__.TestCustomerEdgeCases.test_tc062_zero_copies)
+TC062: 0 copies stored (validation is client-side) ... ok
+test_tc063_999_copies (__main__.TestCustomerEdgeCases.test_tc063_999_copies)
+TC063: 999 copies stored in DB ... ok
+test_tc064_double_click_dedup (__main__.TestCustomerEdgeCases.test_tc064_double_click_dedup)
+TC064: Double-click upload — dedup guard creates only 1 job within 10s ... C:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\tests\test_enterprise_part1.py:687: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  cutoff = datetime.utcnow() - timedelta(seconds=10)
+ok
+test_tc065_triple_click (__main__.TestCustomerEdgeCases.test_tc065_triple_click)
+TC065: Triple-click — same dedup logic applies ... ok
+test_tc066_mobile_browser_upload_page (__main__.TestCustomerEdgeCases.test_tc066_mobile_browser_upload_page)
+TC066: Upload page loads with mobile user-agent ... skipped 'Web server not running'
+test_tc067_tc068_browser_close_midupload (__main__.TestCustomerEdgeCases.test_tc067_tc068_browser_close_midupload)
+TC067-TC068: Browser close/back mid-upload — no server crash ... ok
+test_tc069_submit_no_file (__main__.TestCustomerEdgeCases.test_tc069_submit_no_file)
+TC069: Submit without selecting file — error ... skipped 'Web server not running'
+test_tc070_submit_no_options (__main__.TestCustomerEdgeCases.test_tc070_submit_no_options)
+TC070: Submit file without print options — defaults applied ... skipped 'Web server not running'
+test_tc071_expired_tracking_link (__main__.TestCustomerEdgeCases.test_tc071_expired_tracking_link)
+TC071: Non-existent job_id returns 404 ... skipped 'Web server not running'
+test_tc072_refresh_tracking_page (__main__.TestCustomerEdgeCases.test_tc072_refresh_tracking_page)
+TC072: Repeated status requests return consistent data ... skipped 'Web server not running'
+test_tc073_tc074_same_name_diff_content (__main__.TestCustomerEdgeCases.test_tc073_tc074_same_name_diff_content)
+TC073-TC074: Same filename/different content creates separate jobs ... ok
+test_tc075_tc076_slow_connection (__main__.TestCustomerEdgeCases.test_tc075_tc076_slow_connection)
+TC075-TC076: Slow connection — server timeout handling ... ok
+test_tc077_multiple_tabs (__main__.TestCustomerEdgeCases.test_tc077_multiple_tabs)
+TC077: Multiple tabs — separate sessions work ... skipped 'Web server not running'
+test_tc078_wrong_extension (__main__.TestCustomerEdgeCases.test_tc078_wrong_extension)
+TC078: .pdf content with .jpg extension — allowed_file passes .jpg ... ok
+test_tc079_xerox_zero_copies (__main__.TestCustomerEdgeCases.test_tc079_xerox_zero_copies)
+TC079: XEROX 0 copies — billing returns 0 ... ok
+test_tc080_xerox_1000_copies (__main__.TestCustomerEdgeCases.test_tc080_xerox_1000_copies)
+TC080: XEROX 1000 copies — billing scales correctly ... ok
+test_tc081_submit_during_restart (__main__.TestCustomerEdgeCases.test_tc081_submit_during_restart)
+TC081: Upload during normal operation — server responds ... skipped 'Web server not running'
+
+----------------------------------------------------------------------
+Ran 72 tests in 16.939s
+
+OK (skipped=28)
+
+EXIT: 0

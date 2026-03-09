@@ -84,13 +84,13 @@ class ForgotPasswordDialog(QDialog):
         title.setStyleSheet("font-size: 20px; font-weight: bold;")
         title.setAlignment(Qt.AlignCenter)
         
-        info = QLabel("Enter your username.\nOTP will be sent to your registered email.")
+        info = QLabel("Enter your username or email.\nOTP will be sent to your registered email.")
         info.setAlignment(Qt.AlignCenter)
         info.setStyleSheet("color: #64748b; font-size: 13px;")
         info.setWordWrap(True)
         
         self.s1_username = QLineEdit()
-        self.s1_username.setPlaceholderText("Enter your username")
+        self.s1_username.setPlaceholderText("Enter your username or email")
         
         btn = QPushButton("Send OTP")
         btn.clicked.connect(self.handle_send_otp)
@@ -608,6 +608,11 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("EzPrint Shopkeeper")
     app.setApplicationVersion("1.0.0")
+    
+    # --- License gate ---
+    from shopkeeper_app.licensing import verify_startup_license
+    if not verify_startup_license():
+        sys.exit(0)
     
     # Set up fast shutdown handling
     def force_quit():

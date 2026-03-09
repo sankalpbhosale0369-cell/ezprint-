@@ -1,0 +1,563 @@
+﻿
+========================================
+TEST FILE: test_crash_chain_fix.py
+========================================
+EXIT CODE: 
+============================================================
+  EzPrint Crash Chain Fix â€” Verification Tests
+============================================================
+
+â”€â”€ TEST 1: @safe_printer_action return value â”€â”€
+ERROR: A printer error occurred.
+Please check your printer connection and try again.
+DETAILS: Printer error: Simulated corrupted PDF error
+  âœ… PASS: Returns non-None
+  âœ… PASS: Returns tuple type
+  âœ… PASS: Tuple has 2 elements
+  âœ… PASS: ok is False
+  âœ… PASS: msg is non-empty string
+  âœ… PASS: Tuple unpacking succeeds
+
+â”€â”€ TEST 2: None result guard â”€â”€
+  âœ… PASS: run() completes without crash
+  âœ… PASS: job_failed emitted
+  âœ… PASS: job_id correct
+  âœ… PASS: msg mentions internal error
+  âœ… PASS: job_completed NOT emitted
+
+â”€â”€ TEST 3: (False, msg) result handling â”€â”€
+  âœ… PASS: run() completes without crash
+  âœ… PASS: job_failed emitted
+  âœ… PASS: job_id correct
+  âœ… PASS: msg is 'Printer offline'
+  âœ… PASS: job_completed NOT emitted
+
+â”€â”€ TEST 4: (True, 'ok') success result â”€â”€
+  âœ… PASS: run() completes without crash
+  âœ… PASS: job_failed NOT emitted
+  âœ… PASS: Printing Started reported
+
+â”€â”€ TEST 5: job_failed.emit() throws â†’ fallback logger â”€â”€
+  âœ… PASS: run() completes without crash
+  âœ… PASS: job_failed.emit was attempted
+  âœ… PASS: Logger fallback fired
+  âœ… PASS: Log mentions CRITICAL
+
+â”€â”€ BONUS: End-to-end crash chain â”€â”€
+  âœ… PASS: No TypeError during unpacking
+  âœ… PASS: ok is False
+  âœ… PASS: msg contains error info
+
+============================================================
+  âœ… ALL 26 CHECKS PASSED
+============================================================
+
+STDERR:
+ERROR - 
+================================================================================
+ERROR - 2026-03-06 17:53:17
+Context: TEST_CONTEXT
+Thread: MainThread
+Error Details:
+Printer Error in TEST_CONTEXT: Simulated corrupted PDF error
+Traceback (most recent call last):
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\shared\global_error_handler.py", line 315, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\test_crash_chain_fix.py", line 54, in always_throws
+    raise RuntimeError("Simulated corrupted PDF error")
+RuntimeError: Simulated corrupted PDF error
+
+================================================================================
+
+ERROR - 
+================================================================================
+ERROR - 2026-03-06 17:53:17
+Context: TEST_CONTEXT
+Thread: MainThread
+Error Details:
+Printer Error in TEST_CONTEXT: Simulated corrupted PDF error
+Traceback (most recent call last):
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\shared\global_error_handler.py", line 315, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\test_crash_chain_fix.py", line 54, in always_throws
+    raise RuntimeError("Simulated corrupted PDF error")
+RuntimeError: Simulated corrupted PDF error
+
+================================================================================
+
+ERROR - 
+================================================================================
+ERROR - 2026-03-06 17:53:17
+Context: E2E_TEST
+Thread: MainThread
+Error Details:
+Printer Error in E2E_TEST: fitz.FileDataError: corrupted PDF document
+Traceback (most recent call last):
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\shared\global_error_handler.py", line 315, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\test_crash_chain_fix.py", line 342, in simulate_corrupted_pdf_print
+    raise Exception("fitz.FileDataError: corrupted PDF document")
+Exception: fitz.FileDataError: corrupted PDF document
+
+================================================================================
+
+
+
+========================================
+TEST FILE: test_db.py
+========================================
+EXIT CODE: 
+Loaded DB URL:
+postgresql+psycopg2://postgres.buzentjlnikdacwdexbi:sankalp7020@aws-1-ap-south-1.pooler.supabase.com:6543/postgres?sslmode=require
+Connected: 1
+
+
+========================================
+TEST FILE: test_db_connection.py
+========================================
+EXIT CODE: 
+Cloudinary Cloud Name: dlimcfiru
+Testing Database Connection...
+[+] Attempting to connect to: postgresql+psycopg2://***@***
+[+] SUCCESS: Database connection established!
+
+
+========================================
+TEST FILE: test_eventlet.py
+========================================
+EXIT CODE: 
+Worker started
+Worker finished
+Main finished
+
+STDERR:
+1 RLock(s) were not greened, to fix this error make sure you run eventlet.monkey_patch() before importing any other modules.
+
+
+========================================
+TEST FILE: test_socketio.py
+========================================
+TIMEOUT: Script did not complete within 60 seconds
+EXIT CODE: 
+STDERR:
+1 RLock(s) were not greened, to fix this error make sure you run eventlet.monkey_patch() before importing any other modules.
+
+
+========================================
+TEST FILE: test_step3_migration.py
+========================================
+EXIT CODE: 
+--- Starting Phase 1 Step 3 Test ---
+
+STDERR:
+aiohttp not installed -- cannot make HTTP requests!
+Traceback (most recent call last):
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\test_step3_migration.py", line 101, in <module>
+    asyncio.run(test_migration_step_3())
+  File "C:\Users\Asus\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData\Local\Programs\Python\Python311\Lib\asyncio\base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\test_step3_migration.py", line 26, in test_migration_step_3
+    await sio.connect(WEB_URL, namespaces=["/shops"])
+  File "C:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\venv\Lib\site-packages\socketio\asyncio_client.py", line 163, in connect
+    raise exceptions.ConnectionError(
+socketio.exceptions.ConnectionError: One or more namespaces failed to connect
+
+
+========================================
+TEST FILE: test_step4_migration.py
+========================================
+EXIT CODE: 
+--- Starting Phase 1 Step 4 Test ---
+
+STDERR:
+aiohttp not installed -- cannot make HTTP requests!
+Traceback (most recent call last):
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\test_step4_migration.py", line 42, in test_migration_step_4
+    await sio.connect(WEB_URL, namespaces=["/shops"])
+  File "C:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\venv\Lib\site-packages\socketio\asyncio_client.py", line 163, in connect
+    raise exceptions.ConnectionError(
+socketio.exceptions.ConnectionError: One or more namespaces failed to connect
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\test_step4_migration.py", line 78, in <module>
+    asyncio.run(test_migration_step_4())
+  File "C:\Users\Asus\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData\Local\Programs\Python\Python311\Lib\asyncio\base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\test_step4_migration.py", line 45, in test_migration_step_4
+    print(f"\u274c Failed to connect to {WEB_URL}/shops: {e}")
+  File "C:\Users\Asus\AppData\Local\Programs\Python\Python311\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u274c' in position 0: character maps to <undefined>
+
+
+========================================
+TEST FILE: test_step5_client.py
+========================================
+EXIT CODE: 
+Cloudinary Cloud Name: dlimcfiru
+
+STDERR:
+2026-03-06 17:54:34,591 - TestClient - INFO - Starting test with shop_id=TEST_SHOP
+2026-03-06 17:54:34,593 - shopkeeper_app.socketio_client - INFO - Attempting SocketIO connection to http://localhost:5000 namespace /shops
+2026-03-06 17:54:38,713 - shopkeeper_app.socketio_client - WARNING - SocketIO connection failed: HTTPConnectionPool(host='localhost', port=5000): Max retries exceeded with url: /socket.io/?transport=polling&EIO=4&t=1772799874.593776 (Caused by NewConnectionError("HTTPConnection(host='localhost', port=5000): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it")). Retrying in 1s...
+2026-03-06 17:54:39,594 - TestClient - ERROR - Connection failed! Make sure the server is running on port 5025.
+2026-03-06 17:54:39,595 - TestClient - INFO - Start the server using: python web_interface/app.py (ensure port is 5025 in app.py or env)
+2026-03-06 17:54:39,716 - shopkeeper_app.socketio_client - INFO - Attempting SocketIO connection to http://localhost:5000 namespace /shops
+2026-03-06 17:54:41,597 - TestClient - INFO - Stopping client...
+2026-03-06 17:54:41,598 - TestClient - INFO - Test finished.
+
+
+========================================
+TEST FILE: test_url_processor.py
+========================================
+EXIT CODE: 
+Cloudinary Cloud Name: dlimcfiru
+--- Testing File Processor with Cloudinary URL ---
+Uploading C:\Users\Asus\AppData\Local\Temp\tmpl822kd6i.txt to Cloudinary...
+Cloudinary URL: ('https://res.cloudinary.com/dlimcfiru/raw/upload/s--9wQYSrCJ--/v1/ezprint/test_shop/tmpl822kd6i_lpkbwd.txt', 'ezprint/test_shop/tmpl822kd6i_lpkbwd.txt')
+
+Testing get_page_count(url, 'txt')...
+Page Count Result: 1
+
+Testing normalize_document_for_preview(url, 'txt')...
+DEBUG: LibreOffice found at: None
+Error during document normalization: stat: path should be string, bytes, os.PathLike or integer, not tuple
+Normalized Path: ('https://res.cloudinary.com/dlimcfiru/raw/upload/s--9wQYSrCJ--/v1/ezprint/test_shop/tmpl822kd6i_lpkbwd.txt', 'ezprint/test_shop/tmpl822kd6i_lpkbwd.txt')
+ERROR during testing: stat: path should be string, bytes, os.PathLike or integer, not tuple
+
+STDERR:
+Traceback (most recent call last):
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\test_url_processor.py", line 38, in test_file_processor_with_url
+    if os.path.exists(norm_path) and norm_path.endswith('.pdf'):
+       ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen genericpath>", line 19, in exists
+TypeError: stat: path should be string, bytes, os.PathLike or integer, not tuple
+
+
+========================================
+TEST FILE: scripts\test_duplex_flag.py
+========================================
+EXIT CODE: 
+==============================================================
+|        EzPrint - Duplex Fix Verification Test Suite         |
+|  Validates DEVMODE.Duplex flag without a physical printer   |
+==============================================================
+
+  [OK] Virtual printer found: "Microsoft Print to PDF"
+
+  Reference constants:
+    win32con.DMDUP_SIMPLEX    = 1
+    win32con.DMDUP_VERTICAL   = 2
+    win32con.DMDUP_HORIZONTAL = 3
+
+--- Test Results -------------------------------------------
+
+  [[92mPASS[0m] 01  DEVMODE struct creation
+         dm.Duplex initial value = 0
+  [[92mPASS[0m] 02  Duplex flag assignment (DMDUP_VERTICAL = 2)
+         Expected dm.Duplex == 2, got 2  (DMDUP_VERTICAL   (long-edge duplex))
+  [[92mPASS[0m] 03  Duplex flag != DMDUP_SIMPLEX after fix
+         dm.Duplex = 2 â€” correctly NOT simplex
+  [[92mPASS[0m] 04  Simplex path leaves Duplex at default
+         Default dm.Duplex = 0 â€” OK (simplex/unset)
+  [[92mPASS[0m] 05  Round-trip: CreatePrinterDC + ResetDC with duplex flag
+         ResetDC called successfully but driver readback = 1.
+         This is expected â€” 'Microsoft Print to PDF' has no duplex hardware.
+         The important thing is the fix code PATH executed without error.
+
+--- Summary ------------------------------------------------
+
+  Total : 5
+  Passed: 5
+  Failed: 0
+
+  [92m[PASS] ALL TESTS PASSED -- duplex fix is correctly applied.[0m
+    DEVMODE.Duplex is set to DMDUP_VERTICAL (2) when
+    print_side == "Double", and remains untouched otherwise.
+
+
+
+========================================
+TEST FILE: scripts\test_duplicate_upload.py
+========================================
+EXIT CODE: 
+Cloudinary Cloud Name: dlimcfiru
+
+--- Setup ---
+  Shop A: test-dedup-A-e12eaf1b
+  Shop B: test-dedup-B-c3f95f53
+
+TEST 1: Two identical jobs within 10s -> second is blocked
+  [PASS] Duplicate detected
+  [PASS] Returns original job_id  (original=f2bb84ac, found=f2bb84ac)
+
+TEST 2: Same file after 10s window -> allowed (not a duplicate)
+  [PASS] Old job NOT flagged as duplicate  (found=None)
+
+TEST 3: Same shop, different filename -> allowed
+  [PASS] Different filename not blocked
+
+TEST 4: Same filename, different shop -> allowed
+  [PASS] Different shop not blocked
+
+TEST 5: Same filename+shop, different file_size -> allowed
+  [PASS] Different size not blocked
+
+TEST 6: UI-side _uploadInFlight guard exists in upload.js
+  [PASS] _uploadInFlight variable declared
+  [PASS] Guard check in PRINT handler
+  [PASS] Flag set to true in both flows  (found 2 set-to-true occurrences)
+  [PASS] Flag reset in finally blocks  (found 2 reset-to-false occurrences)
+
+Cleaning up test data...
+  Cleanup OK
+
+==================================================
+Results: 10/10 passed, 0/10 failed
+OK - All tests passed
+==================================================
+
+
+========================================
+TEST FILE: scripts\test_job_recovery.py
+========================================
+EXIT CODE: 
+Cloudinary Cloud Name: dlimcfiru
+
+--- Setup ---
+  Created job 91dea1b0  status='In Queue'
+  Created job 0416e1bb  status='Printing Started'
+  Created job 749926bc  status='Processing'
+  Created job 57d32a3a  status='Printing'
+  Created job 20ca94bd  status='Pending'
+  Created job ab6f984d  status='Completed'
+  Created job e6c7fb95  status='Failed'
+  Created job 16651e39  status='Cancelled'
+  Total: 4 transient + 4 safe = 8 jobs
+
+TEST 1: Transient jobs are marked Failed with descriptive message
+  [PASS] Recovery returned correct count  (count=4)
+  [PASS] Job 91dea1b0 status is Failed  (status='Failed')
+  [PASS] Job 91dea1b0 has 'Interrupted' in error_message  (error_message='Interrupted - app closed while job was "In Queue". Please ve...')
+  [PASS] Job 0416e1bb status is Failed  (status='Failed')
+  [PASS] Job 0416e1bb has 'Interrupted' in error_message  (error_message='Interrupted - app closed while job was "Printing Started". P...')
+  [PASS] Job 749926bc status is Failed  (status='Failed')
+  [PASS] Job 749926bc has 'Interrupted' in error_message  (error_message='Interrupted - app closed while job was "Processing". Please ...')
+  [PASS] Job 57d32a3a status is Failed  (status='Failed')
+  [PASS] Job 57d32a3a has 'Interrupted' in error_message  (error_message='Interrupted - app closed while job was "Printing". Please ve...')
+
+TEST 2: Non-transient jobs are NOT modified
+  [PASS] Job 20ca94bd still 'Pending'  (status='Pending')
+  [PASS] Job ab6f984d still 'Completed'  (status='Completed')
+  [PASS] Job e6c7fb95 still 'Failed'  (status='Failed')
+  [PASS] Job 16651e39 still 'Cancelled'  (status='Cancelled')
+
+TEST 3: Running recovery again with no transient jobs -> no-op
+  [PASS] Second recovery is a no-op  (count=0)
+
+TEST 4: DB error during recovery -> rollback, no crash
+  [PASS] No crash on DB error
+  [PASS] Recovery returned error sentinel  (count=-1)
+  [PASS] Job still 'In Queue' after rollback  (status='In Queue')
+  [PASS] Session still usable
+
+Cleaning up test data...
+  Cleanup OK
+
+==================================================
+Results: 18/18 passed, 0/18 failed
+OK - All tests passed
+==================================================
+
+STDERR:
+WARNING:__main__:Startup recovery: job 91dea1b0-cf01-4f30-982e-c35623b8bb73 changed from 'In Queue' to 'Failed' (interrupted)
+WARNING:__main__:Startup recovery: job 0416e1bb-9c44-4f09-b948-4cb773a9bb41 changed from 'Printing Started' to 'Failed' (interrupted)
+WARNING:__main__:Startup recovery: job 749926bc-e8bd-4240-8016-14b6ebeba9a2 changed from 'Processing' to 'Failed' (interrupted)
+WARNING:__main__:Startup recovery: job 57d32a3a-fb3e-4778-a5b0-df6cf2d34777 changed from 'Printing' to 'Failed' (interrupted)
+WARNING:__main__:Startup recovery: job c2d12f1c-ca73-42b0-b0c0-dc82ff73b8ab changed from 'In Queue' to 'Failed' (interrupted)
+ERROR:__main__:Startup job recovery failed: Simulated DB failure
+
+
+========================================
+TEST FILE: scripts\test_printer_status_db.py
+========================================
+EXIT CODE: 
+TEST 1: Real printer name -> is_active updated in DB
+  [PASS] is_active set to False  (is_active=False)
+  [PASS] is_active set to True  (is_active=True)
+
+TEST 2: Fake printer name -> graceful failure, no crash
+  [PASS] No crash with fake name
+  [PASS] Original row unchanged  (is_active=True)
+
+TEST 3: Simulated DB error -> rollback, session not corrupted
+  [PASS] No crash on DB error
+  [PASS] Rollback preserved old value  (is_active=False)
+  [PASS] Session still usable after error  (query returned 1 rows)
+
+Cleaning up test data...
+  Cleanup OK
+
+==================================================
+Results: 7/7 passed, 0/7 failed
+OK - All tests passed
+==================================================
+
+STDERR:
+ERROR:__main__:Error updating printer status in DB: Simulated DB failure
+
+
+========================================
+TEST FILE: scripts\tests\test_cloudinary.py
+========================================
+EXIT CODE: 
+STDERR:
+Traceback (most recent call last):
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\scripts\tests\test_cloudinary.py", line 11, in <module>
+    result = cloudinary.uploader.upload(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\venv\Lib\site-packages\cloudinary\uploader.py", line 45, in upload
+    return call_cacheable_api("upload", params, file=file, **options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\venv\Lib\site-packages\cloudinary\uploader.py", line 462, in call_cacheable_api
+    result = call_api(action, params, http_headers, return_error, unsigned, file, timeout, **options)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\venv\Lib\site-packages\cloudinary\uploader.py", line 527, in call_api
+    raise Error(result["error"]["message"])
+cloudinary.exceptions.Error: Invalid api_key 695264972578198
+
+
+========================================
+TEST FILE: scripts\tests\test_cloudinary_integration.py
+========================================
+EXIT CODE: 
+
+============================================================
+CLOUDINARY INTEGRATION VERIFICATION
+============================================================
+
+============================================================
+TEST 1: Cloudinary Upload
+============================================================
+Created test file: C:\Users\Asus\AppData\Local\Temp\tmpoyxzhk3r.txt
+  Uploading to Cloudinary...
+Upload successful!
+  Cloudinary URL: ('https://res.cloudinary.com/dlimcfiru/raw/upload/s--3L5_Clch--/v1/ezprint/test_shop/tmpoyxzhk3r_ijgihj.txt', 'ezprint/test_shop/tmpoyxzhk3r_ijgihj.txt')
+Test failed: 'tuple' object has no attribute 'startswith'
+
+STDERR:
+Traceback (most recent call last):
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\scripts\tests\test_cloudinary_integration.py", line 44, in test_cloudinary_upload
+    if cloudinary_url.startswith('https://res.cloudinary.com/'):
+       ^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'tuple' object has no attribute 'startswith'
+Traceback (most recent call last):
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\scripts\tests\test_cloudinary_integration.py", line 203, in <module>
+    success = main()
+              ^^^^^^
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\scripts\tests\test_cloudinary_integration.py", line 175, in main
+    print("\n\u26a0 Skipping desktop download test (upload failed)")
+  File "C:\Users\Asus\AppData\Local\Programs\Python\Python311\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u26a0' in position 2: character maps to <undefined>
+
+
+========================================
+TEST FILE: scripts\tests\test_db_connection.py
+========================================
+EXIT CODE: 
+STDERR:
+Traceback (most recent call last):
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\scripts\tests\test_db_connection.py", line 11, in <module>
+    from shared.database import engine, init_database, SessionLocal
+ModuleNotFoundError: No module named 'shared'
+
+
+========================================
+TEST FILE: scripts\tests\test_filter_logic.py
+========================================
+EXIT CODE: 
+================================================================================
+BEFORE FILTERING:
+================================================================================
+  - HP LaserJet P1007 (USB005)
+  - HP LaserJet P1007 (Copy 1) (USB006)
+  - Microsoft Print to PDF (PORTPROMPT:)
+  - Canon Printer (USB001)
+  - Canon Printer (Copy 2) (USB002)
+
+Total: 5 printers
+[FILTERED] Duplicate queue: HP LaserJet P1007 (Copy 1)
+
+[FILTERED] Virtual printer: Microsoft Print to PDF
+[FILTERED] Duplicate queue: Canon Printer (Copy 2)
+
+================================================================================
+AFTER FILTERING:
+================================================================================
+  - HP LaserJet P1007 (USB005)
+  - Canon Printer (USB001)
+
+Total: 2 printers
+
+================================================================================
+VERIFICATION:
+================================================================================
+[PASS] No (Copy X) printers in filtered list
+[PASS] No virtual printers in filtered list
+[PASS] Exactly 1 HP LaserJet P1007 in filtered list
+[PASS] Exactly 1 Canon Printer in filtered list
+
+================================================================================
+TEST COMPLETE - ALL CHECKS PASSED
+================================================================================
+
+
+========================================
+TEST FILE: scripts\tests\test_inference.py
+========================================
+EXIT CODE: 
+Capabilities for 'Canon G2000 series Printer': {'is_color': False, 'is_duplex': False, 'type': 'single'}
+
+
+========================================
+TEST FILE: scripts\tests\test_security_and_config.py
+========================================
+EXIT CODE: 
+STDERR:
+Traceback (most recent call last):
+  File "c:\Users\Asus\Desktop\EzPrint - MVP level Fixes done - Copy\scripts\tests\test_security_and_config.py", line 4, in <module>
+    import pytest
+ModuleNotFoundError: No module named 'pytest'
+
+
+========================================
+TEST FILE: tests\test_full_e2e_load.py
+========================================
+EXIT CODE: 
+Starting full E2E load test...
+DEBUG: API call failed to http://127.0.0.1:5000/api/health: HTTPConnectionPool(host='127.0.0.1', port=5000): Max retries exceeded with url: /api/health (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', port=5000): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it"))
+CRITICAL: Server is not running or not healthy at localhost:5000. Please start it first.
+
+

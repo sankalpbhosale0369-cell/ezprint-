@@ -194,6 +194,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let currentJobId = null;
     let statusCheckInterval = null;
     let currentShopId = null;
+    let _uploadInFlight = false; // Double-submit guard
 
     // Multi-page preview state (BUG FIX: Added to support proper page navigation)
     let previewUrls = [];  // Array of all preview URLs
@@ -1695,6 +1696,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Extract print job submission logic
     async function submitXeroxPrintJob() {
+        // Double-submit guard
+        if (_uploadInFlight) return;
+        _uploadInFlight = true;
         try {
             // Validate image sizes and build metadata
             const { files, metadata } = getXeroxDocumentFiles();
@@ -1785,6 +1789,7 @@ document.addEventListener('DOMContentLoaded', function () {
             console.error('XEROX Upload error:', error);
             alert('Upload failed: ' + error.message);
         } finally {
+            _uploadInFlight = false;
             xeroxUploadBtn.innerHTML = 'Print Document';
             xeroxUploadBtn.disabled = false;
         }
@@ -1793,6 +1798,9 @@ document.addEventListener('DOMContentLoaded', function () {
     // Upload form handler (PRINT flow only)
     uploadForm.addEventListener('submit', function (e) {
         e.preventDefault();
+
+        // Double-submit guard
+        if (_uploadInFlight) return;
 
         // Skip if in XEROX mode
         if (currentMode === 'xerox') {
@@ -1845,6 +1853,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         // Show loading
+        _uploadInFlight = true;
         uploadBtn.innerHTML = '<span class="loading"></span> Uploading...';
         uploadBtn.disabled = true;
 
@@ -1879,6 +1888,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 alert('Upload failed: ' + error.message);
             })
             .finally(() => {
+                _uploadInFlight = false;
                 uploadBtn.innerHTML = 'Upload & Print';
                 uploadBtn.disabled = false;
             });

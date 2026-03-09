@@ -315,7 +315,7 @@ def safe_printer_action(error_context: str = "PRINTER"):
                 return func(*args, **kwargs)
             except Exception as e:
                 global_error_handler.handle_printer_error(e, error_context)
-                return None
+                return (False, f"Printer error: {str(e)}")
         return wrapper
     return decorator
 

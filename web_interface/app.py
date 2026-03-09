@@ -8,7 +8,7 @@ Flask web application for customer interface
 import os
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_from_directory, url_for
 from flask_socketio import SocketIO, emit, join_room, disconnect
@@ -17,11 +17,12 @@ from werkzeug.utils import secure_filename
 from shared.cloudinary_helper import upload_file_to_cloudinary
 import logging
 import sys
+import threading
 
 # Add parent directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from shared.database import Shopkeeper, PrintJob, ShopPricing, SessionLocal, init_database
+from shared.database import Shopkeeper, PrintJob, ShopPricing, License, SessionLocal, init_database
 from shared.file_processor import save_uploaded_file, get_page_count, create_preview_image, create_preview_image_with_layout, allowed_file, generate_multi_page_previews, parse_page_range, combine_pages_into_layout_sheets, combine_images_to_pdf, classify_color_pages, calculate_billing
 from shared import config as cfg  # use centralized config (env-driven)
 from shared.config import UPLOAD_FOLDER, MAX_FILE_SIZE, WEB_HOST, WEB_PORT
@@ -86,6 +87,13 @@ def _shutdown_session(exception=None):  # ensure session is removed per-request
         pass
 
 # Shop occupancy tracking is now handled by SocketIO/Redis rooms
+
+# ── Upload dedup locks ────────────────────────────────────────────────────────
+# Per-dedup-key locks prevent the check-then-insert race condition when two
+# identical upload requests arrive simultaneously (e.g. double-click).
+# _upload_locks_mutex guards mutations to the dict itself.
+_upload_locks: dict = {}
+_upload_locks_mutex = threading.Lock()
 
 @app.route('/')
 def index():
@@ -219,7 +227,18 @@ def upload_file():
             
             file = request.files['file']
             if file.filename == '':
-                return jsonify({'error': 'No file selected'}), 400
+                return jsonify({'success': False, 'error': 'No file received.'}), 400
+            
+            # CHECK 2 — Empty file (0 bytes)
+            file.seek(0, 2)  # seek to end
+            size = file.tell()
+            file.seek(0)     # reset
+            if size == 0:
+                return jsonify({'success': False, 'error': 'Uploaded file is empty.'}), 400
+            
+            # CHECK 3 — Unsupported file type
+            if not allowed_file(file.filename):
+                return jsonify({'success': False, 'error': 'File type not supported.'}), 400
             
             # Save file (EXTENDED: capture cloudinary_public_id)
             file_path, original_filename, file_size, file_type, cloudinary_public_id = save_uploaded_file(file, shop_id)
@@ -322,23 +341,68 @@ def upload_file():
         except Exception as e:
             logger.warning(f"Preview generation failed during upload: {e}")
         
-        # Create print job with calculated amount and asset metadata
-        print_job = PrintJob(
-            shop_id=shop_id,
-            filename=original_filename,
-            file_path=file_path,
-            file_size=file_size,
-            file_type=file_type,
-            amount=total_amount,  # Save calculated amount
-            total_pages=page_count,  # Persist actual numeric page count
-            cloudinary_public_id=cloudinary_public_id,
-            preview_paths=preview_paths_json,
-            **print_settings
-        )
-        
-        dbi = db_session()
-        dbi.add(print_job)
-        dbi.commit()
+        # ── Duplicate upload guard (10-second window, race-condition safe) ──
+        # LAYER 1 — per-key in-process lock: serialises concurrent requests
+        # that share the same (shop_id, filename, file_size) signature so
+        # only one thread can execute the DB check+insert at a time.
+        # LAYER 2 — 10-second DB window: still checked inside the lock so
+        # browser retries and network replays are also rejected.
+        dedup_key = f"{shop_id}:{original_filename}:{file_size}"
+
+        with _upload_locks_mutex:
+            if dedup_key not in _upload_locks:
+                _upload_locks[dedup_key] = threading.Lock()
+            _dedup_lock = _upload_locks[dedup_key]
+
+        print_job = None
+        try:
+            with _dedup_lock:
+                # --- critical section: check then insert are now atomic ---
+                dedup_cutoff = datetime.utcnow() - timedelta(seconds=10)
+                existing_dup = db_session().query(PrintJob).filter(
+                    PrintJob.shop_id == shop_id,
+                    PrintJob.filename == original_filename,
+                    PrintJob.file_size == file_size,
+                    PrintJob.created_at >= dedup_cutoff
+                ).first()
+                if existing_dup:
+                    logger.warning(
+                        f"Duplicate upload blocked: shop={shop_id}, "
+                        f"file={original_filename}, size={file_size}, "
+                        f"existing_job={existing_dup.job_id}"
+                    )
+                    return jsonify({
+                        'success': True,
+                        'job_id': existing_dup.job_id,
+                        'file_type': existing_dup.file_type,
+                        'message': 'File already uploaded',
+                        'duplicate': True
+                    })
+
+                # No duplicate found — create the print job inside the lock
+                print_job = PrintJob(
+                    shop_id=shop_id,
+                    filename=original_filename,
+                    file_path=file_path,
+                    file_size=file_size,
+                    file_type=file_type,
+                    amount=total_amount,
+                    total_pages=page_count,
+                    cloudinary_public_id=cloudinary_public_id,
+                    preview_paths=preview_paths_json,
+                    **print_settings
+                )
+
+                dbi = db_session()
+                dbi.add(print_job)
+                dbi.commit()
+                # --- end critical section ---
+        finally:
+            # Clean up the per-key lock once this request is done to prevent
+            # unbounded memory growth (safe: any other waiter already acquired
+            # it before we try to remove it, so removal only affects new comers).
+            with _upload_locks_mutex:
+                _upload_locks.pop(dedup_key, None)
         
         # TRACE B: PrintJob committed with status
         logger.info(f"TRACE B: PrintJob committed with status={print_job.status}, job_id={print_job.job_id}")
@@ -727,6 +791,120 @@ def get_pricing(shop_id):
     
     return safe_execute(_get_pricing, error_context="GET_PRICING",
                        default_return=(jsonify({'error': 'Failed to get pricing'}), 500))
+
+# ── License Check Endpoint ────────────────────────────────────────────────────
+@app.route('/api/license/check', methods=['POST'])
+def license_check():
+    """
+    POST /api/license/check
+    
+    Unauthenticated endpoint — called by desktop client BEFORE login.
+    Checks device license status. Creates 15-day trial for new devices.
+    Fail-open: server errors return status='active' to never lock out users.
+    """
+    device_id = None
+    try:
+        data = request.get_json(silent=True) or {}
+        device_id = (data.get('device_id') or '').strip()
+        email = (data.get('email') or '').strip() or None
+
+        # 1. Validate — device_id is required
+        if not device_id:
+            return jsonify({
+                'status': 'error',
+                'days_remaining': None,
+                'message': 'device_id is required',
+                'trial_end': None,
+                'device_id': None
+            }), 400
+
+        db = SessionLocal()
+        try:
+            # 2. Look up existing license
+            lic = db.query(License).filter(License.device_id == device_id).first()
+
+            now = datetime.now(timezone.utc)
+
+            # 3. New device — create trial
+            if lic is None:
+                trial_end = now + timedelta(days=15)
+                lic = License(
+                    device_id=device_id,
+                    email=email,
+                    status='trial',
+                    trial_start=now,
+                    trial_end=trial_end,
+                )
+                db.add(lic)
+                db.commit()
+                logger.info(f"License: new trial created for device {device_id[:12]}...")
+                return jsonify({
+                    'status': 'trial',
+                    'days_remaining': 15,
+                    'message': 'Trial started — 15 days free',
+                    'trial_end': trial_end.isoformat(),
+                    'device_id': device_id
+                }), 200
+
+            # 4. Existing device — evaluate status
+            status = (lic.status or 'trial').lower()
+
+            if status == 'active':
+                resp_status, days_rem, msg = 'active', None, 'License is active'
+                trial_end_iso = None
+
+            elif status == 'blocked':
+                resp_status, days_rem, msg = 'blocked', 0, 'Device is blocked — contact support'
+                trial_end_iso = None
+
+            elif status == 'trial':
+                if lic.trial_end:
+                    delta = lic.trial_end - now
+                    days_rem = max(0, delta.days)
+                else:
+                    days_rem = 0
+
+                if days_rem <= 0:
+                    # Trial expired — persist the status change
+                    lic.status = 'expired'
+                    db.commit()
+                    resp_status, days_rem, msg = 'expired', 0, 'Trial has expired'
+                else:
+                    resp_status = 'trial'
+                    msg = f'{days_rem} day{"s" if days_rem != 1 else ""} remaining in your trial'
+
+                trial_end_iso = lic.trial_end.isoformat() if lic.trial_end else None
+
+            else:  # 'expired' or any unknown
+                resp_status, days_rem, msg = 'expired', 0, 'Trial has expired'
+                trial_end_iso = lic.trial_end.isoformat() if lic.trial_end else None
+
+            # 5. Write-once email update (never overwrite existing)
+            if email and not lic.email:
+                lic.email = email
+                db.commit()
+
+            return jsonify({
+                'status': resp_status,
+                'days_remaining': days_rem,
+                'message': msg,
+                'trial_end': trial_end_iso,
+                'device_id': device_id
+            }), 200
+
+        finally:
+            db.close()
+
+    except Exception as e:
+        # FAIL-OPEN: never lock out a user due to server error
+        logger.error(f"License check error: {e}", exc_info=True)
+        return jsonify({
+            'status': 'active',
+            'days_remaining': None,
+            'message': 'License server unavailable - access granted',
+            'trial_end': None,
+            'device_id': device_id
+        }), 200
 
 @socketio.on('connect')
 def handle_connect():

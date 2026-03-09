@@ -162,6 +162,11 @@ class IPPPrinting:
         else:
             request.extend(self._encode_string_attribute(0x23, "print-color-mode", "color"))
         
+        # Duplex
+        print_side = settings.get('print_side', 'Single')
+        if print_side == 'Double':
+            request.extend(self._encode_string_attribute(0x44, "sides", "two-sided-long-edge"))
+        
         # End of attributes
         request.append(0x03)
         
