@@ -497,6 +497,8 @@ class LoginWindow(QMainWindow):
         )
         
         if success:
+            from shopkeeper_app.licensing import check_license
+            check_license(email=email, shop_name=shop_name)
             self.show_success_message(f"Registration Successful! Shop ID: {shopkeeper_data['shop_id']}")
             # Small delay to show success message before opening dashboard
             def _open_after_register():

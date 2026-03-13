@@ -807,6 +807,7 @@ def license_check():
         data = request.get_json(silent=True) or {}
         device_id = (data.get('device_id') or '').strip()
         email = (data.get('email') or '').strip() or None
+        shop_name = (data.get('shop_name') or '').strip() or None
 
         # 1. Validate — device_id is required
         if not device_id:
@@ -880,8 +881,14 @@ def license_check():
                 trial_end_iso = lic.trial_end.isoformat() if lic.trial_end else None
 
             # 5. Write-once email update (never overwrite existing)
+            updated = False
             if email and not lic.email:
                 lic.email = email
+                updated = True
+            if shop_name and not lic.shop_name:
+                lic.shop_name = shop_name
+                updated = True
+            if updated:
                 db.commit()
 
             return jsonify({

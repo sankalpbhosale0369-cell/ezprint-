@@ -132,7 +132,7 @@ def get_device_id() -> str:
 # FUNCTION 2: check_license
 # ═══════════════════════════════════════════════════════════════════════════
 
-def check_license(email: str | None = None) -> dict:
+def check_license(email: str | None = None, shop_name: str | None = None) -> dict:
     """
     Verify the current license status with the backend.
 
@@ -149,7 +149,7 @@ def check_license(email: str | None = None) -> dict:
         Never raises an exception.
     """
     device_id = get_device_id()
-    payload = {"device_id": device_id, "email": email}
+    payload = {"device_id": device_id, "email": email, "shop_name": shop_name}
 
     # ------------------------------------------------------------------
     # 1. Try a fresh check against the server

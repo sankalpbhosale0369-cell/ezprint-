@@ -139,6 +139,7 @@ class License(Base):
     device_id = Column(String(64), primary_key=True)
     shop_id = Column(String(36), nullable=True)
     email = Column(String(255), nullable=True)
+    shop_name = Column(String(255), nullable=True)
     status = Column(String(20), default='trial')  # trial | active | expired | blocked
     trial_start = Column(DateTime(timezone=True), default=func.now())
     trial_end = Column(DateTime(timezone=True))
