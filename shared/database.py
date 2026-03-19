@@ -101,7 +101,10 @@ class Printer(Base):
     is_default = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-
+    # Manual capability overrides (None = Auto Detect, True = Force ON, False = Force OFF)
+    duplex_override = Column(Boolean, nullable=True, default=None)
+    color_override = Column(Boolean, nullable=True, default=None)
+    bw_single_override = Column(Boolean, nullable=True, default=True)
 class SystemLog(Base):
     """System logging model"""
     __tablename__ = 'system_logs'
@@ -299,12 +302,31 @@ def migrate_schema():
                 existing_cols = {col['name'] for col in inspector.get_columns('shop_pricing')}
                 required_cols = {'id', 'shop_id', 'bw_single', 'bw_double', 'color_single', 'color_double', 'updated_at'}
                 missing_cols = required_cols - existing_cols
-                
+            
                 if missing_cols:
                     print(f"Shop_pricing table missing columns: {missing_cols}")
             except Exception as e:
                 print(f"Shop_pricing table migration warning: {e}")
-            
+
+        # Migrate printers table — add capability override columns
+        if 'printers' in inspector.get_table_names():
+            existing_cols = {col['name'] for col in inspector.get_columns('printers')}
+            printer_cols_to_add = []
+            if 'duplex_override' not in existing_cols:
+                printer_cols_to_add.append(('duplex_override', 'BOOLEAN'))
+            if 'color_override' not in existing_cols:
+                printer_cols_to_add.append(('color_override', 'BOOLEAN'))
+            if 'bw_single_override' not in existing_cols:
+                printer_cols_to_add.append(('bw_single_override', 'BOOLEAN'))
+            with engine.connect() as conn:
+                for col_name, col_type in printer_cols_to_add:
+                    try:
+                        conn.execute(text(f"ALTER TABLE printers ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
+                        print(f"Added {col_name} to printers table")
+                    except Exception as e:
+                        print(f"Warning adding {col_name} to printers: {e}")
+
     except Exception as e:
         # Do not crash app on migration; log to stdout for MVP
         print(f"Database migration warning: {e}")

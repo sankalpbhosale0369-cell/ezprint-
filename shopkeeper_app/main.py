@@ -36,6 +36,49 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+import json
+from datetime import datetime, timedelta
+
+SESSION_DIR = os.path.join(os.getenv("APPDATA"), "EzPrint")
+SESSION_FILE = os.path.join(SESSION_DIR, "session.json")
+
+def save_session(shopkeeper_data):
+    try:
+        os.makedirs(SESSION_DIR, exist_ok=True)
+        session = {
+            "shopkeeper_data": shopkeeper_data,
+            "timestamp": datetime.now().isoformat()
+        }
+        with open(SESSION_FILE, "w") as f:
+            json.dump(session, f)
+        logger.info("Session saved")
+    except Exception as e:
+        logger.error(f"Session save failed: {e}")
+
+def load_session():
+    try:
+        if not os.path.exists(SESSION_FILE):
+            return None
+        with open(SESSION_FILE, "r") as f:
+            data = json.load(f)
+        timestamp = datetime.fromisoformat(data["timestamp"])
+        if datetime.now() - timestamp > timedelta(days=15):
+            os.remove(SESSION_FILE)
+            return None
+        return data["shopkeeper_data"]
+    except Exception as e:
+        logger.error(f"Session load failed: {e}")
+        return None
+
+def clear_session():
+    try:
+        if os.path.exists(SESSION_FILE):
+            os.remove(SESSION_FILE)
+            logger.info("Session cleared")
+    except Exception as e:
+        logger.error(f"Session clear failed: {e}")
+
 class ForgotPasswordDialog(QDialog):
     def __init__(self, auth_manager, parent=None):
         super().__init__(parent)
@@ -211,6 +254,7 @@ class LoginWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.auth_manager = AuthManager()
+        self.setWindowIcon(QIcon("assets/icons/ezprint.ico"))
         self.init_ui()
     
     def init_ui(self):
@@ -454,6 +498,7 @@ class LoginWindow(QMainWindow):
         success, message, shopkeeper_data = self.auth_manager.login_shopkeeper(username, password)
         
         if success:
+            save_session(shopkeeper_data)
             self.show_success_message("Login Successful")
             # Small delay to show success message before opening dashboard
             # Use safe delayed open to avoid invoking methods on deleted windows
@@ -500,6 +545,7 @@ class LoginWindow(QMainWindow):
             from shopkeeper_app.licensing import check_license
             check_license(email=email, shop_name=shop_name)
             self.show_success_message(f"Registration Successful! Shop ID: {shopkeeper_data['shop_id']}")
+            save_session(shopkeeper_data)
             # Small delay to show success message before opening dashboard
             def _open_after_register():
                 try:
@@ -519,6 +565,7 @@ class LoginWindow(QMainWindow):
             def on_logout():
                 try:
                     logger.info("Logout requested, returning to login window")
+                    clear_session()
                     self.show()
                 except Exception as e:
                     logger.error(f"Error during logout: {e}")
@@ -600,16 +647,32 @@ class LoginWindow(QMainWindow):
 
 def main():
     """Main application entry point"""
+
     # Initialize error handling
     initialize_error_handling()
-    
-    # Initialize database with error handling
+
+    # Initialize database
     safe_execute(init_database, error_context="DATABASE_INIT", show_dialog=True)
-    
+
+    import os
+    import sys
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QApplication
+
+    # DPI / scaling support
+    os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
+    os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
+    os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
+
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
+
     # Create application
     app = QApplication(sys.argv)
+
     app.setApplicationName("EzPrint Shopkeeper")
     app.setApplicationVersion("1.0.0")
+    app.setWindowIcon(QIcon("assets/icons/ezprint.ico"))
     
     # --- License gate ---
     from shopkeeper_app.licensing import verify_startup_license
@@ -629,9 +692,14 @@ def main():
     signal.signal(signal.SIGTERM, lambda s, f: force_quit())
     
     # Create and show login window
+    saved_session = load_session()
     login_window = safe_execute(LoginWindow, error_context="LOGIN_WINDOW_CREATION", show_dialog=True)
     if login_window:
-        login_window.show()
+        if saved_session:
+            logger.info("Auto-login session found")
+            login_window.open_dashboard(saved_session)
+        else:
+            login_window.show()
         
         # Create startup signal file to indicate GUI is ready
         try:

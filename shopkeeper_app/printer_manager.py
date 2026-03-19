@@ -327,22 +327,38 @@ class PrinterManager:
                 except:
                     pass
 
-        # 2. HEURISTIC-BASED DETECTION (Primary for Type, Fallback for Color & Duplex)
+        user_duplex = None
+        user_color = None
+        try:
+            db = SessionLocal()
+            printer_record = db.query(Printer).filter(
+                Printer.printer_name == printer_name,
+                Printer.is_active == True
+            ).order_by(Printer.id.desc()).first()
+            if printer_record:
+                user_duplex = printer_record.duplex_override   # None/True/False
+                user_color = printer_record.color_override     # None/True/False
+            db.close()
+        except Exception as e:
+            logger.debug(f"Could not read user overrides for '{printer_name}': {e}")
+
+        # 2. HEURISTIC-BASED DETECTION
         printer_name_upper = printer_name.upper()
         
         # Check against known patterns
         for pattern, is_color, is_duplex, printer_type in self._printer_patterns:
             if pattern.upper() in printer_name_upper:
                 return {
-                    "is_color": driver_is_color if driver_is_color is not None else is_color,
-                    "is_duplex": driver_is_duplex if driver_is_duplex is not None else is_duplex,
+                    # Priority: User Override > Driver > Pattern
+                    "is_color": user_color if user_color is not None else (driver_is_color if driver_is_color is not None else is_color),
+                    "is_duplex": user_duplex if user_duplex is not None else (driver_is_duplex if driver_is_duplex is not None else is_duplex),
                     "type": printer_type
                 }
         
-        # Default fallback: Only if no pattern matches
+        # Default fallback
         return {
-            "is_color": driver_is_color if driver_is_color is not None else False,
-            "is_duplex": driver_is_duplex if driver_is_duplex is not None else False,
+            "is_color": user_color if user_color is not None else (driver_is_color if driver_is_color is not None else False),
+            "is_duplex": user_duplex if user_duplex is not None else (driver_is_duplex if driver_is_duplex is not None else False),
             "type": "single"
         }
     
@@ -692,6 +708,14 @@ class PrinterManager:
         except Exception as e:
             logger.error(f"Error during printer manager cleanup: {e}")
     
+    def reinitialize_printer(self):
+        try:
+            logger.info("Reinitializing printer connection...")
+            self.refresh_printer_discovery()
+            logger.info("Printer reinitialized successfully")
+        except Exception as e:
+            logger.error(f"Printer reinitialize failed: {e}")
+
     def set_default_printer(self, shop_id, printer_name):
         """
         Set default printer for shop
@@ -1119,7 +1143,7 @@ class PrinterManager:
                     
                     # CRITICAL FIX: Increased grace period for job to appear in spooler
                     # Job may take 5-15 seconds to appear after print() call
-                    job_appear_grace_secs = 15.0
+                    job_appear_grace_secs = 30.0
                     
                     # Track job lifecycle
                     job_seen = False  # Has job appeared in spooler at least once?
@@ -1179,11 +1203,17 @@ class PrinterManager:
 
                         # Look for our job in spooler
                         job_info = None
+                        pdf_fallback = None
                         for job_entry in h_jobs:
                             doc_name = job_entry.get('pDocument', '')
-                            if job_id in doc_name or doc_name.startswith('EzPrint Job'):
+                            if job_id and job_id in doc_name:
                                 job_info = job_entry
                                 break
+                            elif doc_name.lower().endswith(".pdf") and pdf_fallback is None:
+                                pdf_fallback = job_entry
+
+                        if job_info is None:
+                            job_info = pdf_fallback
 
                         if not job_info:
                             # Job not found in spooler
@@ -1194,7 +1224,15 @@ class PrinterManager:
                                     time.sleep(1.0)
                                     continue
                                 else:
-                                    # Job never appeared - mark as Failed
+                                    # Job never appeared in spooler
+                                    # Commercial printers (Canon ADV series) process jobs
+                                    # so fast that job appears and disappears before first poll.
+                                    # Check if SumatraPDF returned success for this job.
+                                    if job_id in self._sumatra_ok_jobs:
+                                        self._sumatra_ok_jobs.discard(job_id)
+                                        logger.info(f"Job {job_id} completed (fast commercial printer: job processed before poll window)")
+                                        callback(job_id, 'Completed', 100, 'Printed successfully')
+                                        return
                                     logger.warning(f"Job {job_id} never appeared in spooler after {elapsed:.1f}s")
                                     callback(job_id, 'Failed', 0, 'Job never appeared in print spooler')
                                     return
@@ -1304,7 +1342,7 @@ class PrinterManager:
                                 callback(job_id, 'Failed', 0, f'Timed out after {timeout_secs}s - job never appeared')
                             return
 
-                        time.sleep(1.0)  # Poll every 1 second
+                        time.sleep(0.3)  # Poll every 300ms for fast commercial printers
                         
                     # Final cleanup of thread and callback references
                     if job_id in self.job_status_threads:
@@ -1377,8 +1415,8 @@ class PrinterManager:
                 opts.append('monochrome')
             else:
                 opts.append('color')
-            if copies and copies > 1:
-                opts.append(f'copies={copies}')
+            #if copies and copies > 1:
+                #opts.append(f'{copies}x')
             if page_range:
                 # Sumatra expects e.g. 1,3-5
                 opts.append(f'page-range={page_range}')
@@ -1389,25 +1427,36 @@ class PrinterManager:
                 '-print-to', target_printer,
                 '-print-settings', settings_str,
                 '-silent',
+                '-exit-on-print',
                 pdf_path
             ]
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=0x08000000)  # CREATE_NO_WINDOW
-            
-            # Store Popen object for cancellation (FIX 4)
-            if job_id and hasattr(self, 'active_jobs') and job_id in self.active_jobs:
-                self.active_jobs[job_id]['process'] = proc
-                
-            stdout, stderr = proc.communicate()
-            
-            # Cleanup after process finishes
+            effective_copies = max(1, int(copies or 1))
+
+            for _ in range(effective_copies):
+
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    creationflags=0x08000000
+                )
+
+                # Store Popen object for cancellation
+                if job_id and hasattr(self, 'active_jobs') and job_id in self.active_jobs:
+                    self.active_jobs[job_id]['process'] = proc
+
+                stdout, stderr = proc.communicate()
+
+                if proc.returncode != 0:
+                    logger.error(f"SumatraPDF print failed: {stderr.decode(errors='ignore')}")
+                    return False, "SumatraPDF print failed"
+
+            # Cleanup after all copies printed
             if job_id and hasattr(self, 'active_jobs') and job_id in self.active_jobs:
                 del self.active_jobs[job_id]
 
-            if proc.returncode == 0:
-                return True, "Document sent to printer"
-            else:
-                logger.error(f"SumatraPDF print failed: {proc.stderr.decode(errors='ignore')}")
-                return False, "SumatraPDF print failed"
+            return True, "Document sent to printer"
+            
         except Exception as e:
             # Also cleanup on exception
             if job_id and hasattr(self, 'active_jobs') and job_id in self.active_jobs:

@@ -4,6 +4,7 @@ QR Code generation utilities
 import qrcode
 from PIL import Image
 import os
+from pathlib import Path
 from shared.config import BASE_DIR, QR_CODE_SIZE, QR_CODE_BORDER, EZPRINT_BASE_URL
 
 def generate_qr_code(shop_id, shop_name):
@@ -35,8 +36,8 @@ def generate_qr_code(shop_id, shop_name):
     qr_image = qr.make_image(fill_color="black", back_color="white")
     
     # Save QR code
-    qr_dir = BASE_DIR / "web_interface" / "static" / "images" / "qr_codes"
-    qr_dir.mkdir(exist_ok=True)
+    qr_dir = Path(os.getenv("LOCALAPPDATA")) / "EzPrint" / "uploads" / "qr_codes"
+    qr_dir.mkdir(parents=True, exist_ok=True)
     
     qr_filename = f"qr_{shop_id}.png"
     qr_path = qr_dir / qr_filename

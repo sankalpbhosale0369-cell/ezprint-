@@ -832,6 +832,7 @@ def license_check():
                 lic = License(
                     device_id=device_id,
                     email=email,
+                    shop_name=shop_name,
                     status='trial',
                     trial_start=now,
                     trial_end=trial_end,
@@ -912,6 +913,27 @@ def license_check():
             'trial_end': None,
             'device_id': device_id
         }), 200
+    
+@app.route('/uploads/<shop_id>/<filename>')
+def serve_uploaded_file(shop_id, filename):
+    """Serve locally stored files as fallback when Cloudinary unavailable"""
+    try:
+        import re
+        if not re.match(r'^[A-Za-z0-9_-]+$', shop_id):
+            return jsonify({'error': 'Invalid shop_id'}), 400
+        if not re.match(r'^[A-Za-z0-9._-]+$', filename):
+            return jsonify({'error': 'Invalid filename'}), 400
+        upload_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'uploads', shop_id
+        )
+        full_path = os.path.join(upload_dir, filename)
+        if not os.path.exists(full_path):
+            return jsonify({'error': 'File not found'}), 404
+        return send_from_directory(upload_dir, filename)
+    except Exception as e:
+        logger.error(f"Error serving local file: {e}")
+        return jsonify({'error': 'File not found'}), 404
 
 @socketio.on('connect')
 def handle_connect():
@@ -1006,7 +1028,7 @@ if __name__ == '__main__':
             app,
             host="0.0.0.0",
             port=int(os.environ.get("PORT", 5000)),
-            debug=True
+            debug=False
         )
 
 

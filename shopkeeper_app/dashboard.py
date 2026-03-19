@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QTextEdit, QProgressBar, QSplitter, QFrame, QFileDialog, 
                            QListWidget, QListWidgetItem, QCheckBox, QDialog, QScrollArea, QListView,
                            QToolButton, QMenu, QAction, QDateEdit, QDialogButtonBox, QGraphicsDropShadowEffect,
-                           QStyledItemDelegate, QFormLayout, QSizePolicy, QToolTip)
+                           QStyledItemDelegate, QFormLayout, QSizePolicy, QToolTip, QRadioButton)
 try:
     from PyQt5.QtWebEngineWidgets import QWebEngineView
     WEBENGINE_AVAILABLE = True
@@ -714,9 +714,6 @@ class ConnectPrintersDialog(QDialog):
             }
         """)
         close_btn.clicked.connect(self.accept)
-        footer_layout.addWidget(close_btn)
-        
-        layout.addLayout(footer_layout)
     
     def setup_timer(self):
         """Setup timer for real-time updates with enhanced WiFi detection"""
@@ -1709,9 +1706,10 @@ class JobPopupDialog(QDialog):
                 logger.warning(f"Initial routing check failed for Popup: {e}")
         
         self.init_ui()
+        QTimer.singleShot(0, self.center_on_screen)
         # Initial visibility check for Cancel button
         self._update_cancel_visibility(self.job.status)
-
+        
         # Bind to existing status update mechanism (dashboard's thread-safe signal)
         if hasattr(self.dashboard, 'thread_safe_signal'):
             self.dashboard.thread_safe_signal.connect(self.on_dashboard_signal)
@@ -1721,9 +1719,23 @@ class JobPopupDialog(QDialog):
         self._printer_status_timer.timeout.connect(self._refresh_printer_status)
         self._printer_status_timer.start(2000) # 2 seconds
         
+    def center_on_screen(self):
+        screen = self.screen().availableGeometry()
+        x = screen.x() + (screen.width() - self.width()) // 2
+        y = screen.y() + (screen.height() - self.height()) // 2
+        self.move(x, y)
+
     def init_ui(self):
         self.setWindowTitle("New Print Job")
-        self.setFixedSize(420, 520)  # Increased height for customization details
+        screen = self.screen().size()
+
+        dialog_w = min(360, int(screen.width() * 0.30))
+        dialog_h = min(560, int(screen.height() * 0.72))
+
+        # Allow height to be driven by content — prevents child-widget bleed/overflow
+        self.setMinimumWidth(dialog_w)
+        self.setMaximumWidth(dialog_w)
+        self.adjustSize()
         # Non-blocking (Modeless) overlay and remove help icon
         self.setWindowFlags((self.windowFlags() | Qt.WindowStaysOnTopHint) & ~Qt.WindowContextHelpButtonHint)
         
@@ -1739,8 +1751,10 @@ class JobPopupDialog(QDialog):
         """)
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(12)  # Slightly reduced spacing to fit everything
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(6)
+        # Constrain dialog width strictly but allow height to grow with content
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         
         # Divider is now at the top after removing header
 
@@ -1759,8 +1773,8 @@ class JobPopupDialog(QDialog):
             }
         """)
         header_layout = QVBoxLayout(job_header_card)
-        header_layout.setContentsMargins(20, 16, 20, 16)
-        header_layout.setSpacing(6)
+        header_layout.setContentsMargins(12, 8, 12, 8)
+        header_layout.setSpacing(3)
         
         # 1. JOB ID Label
         job_id_title = QLabel("JOB ID")
@@ -1778,7 +1792,7 @@ class JobPopupDialog(QDialog):
         job_id_display = safe_text(self.job.job_id)[:8]
         job_id_val_hero = QLabel(job_id_display)
         job_id_val_hero.setAlignment(Qt.AlignCenter)
-        job_id_val_hero.setStyleSheet("color: #111827; font-size: 28px; font-weight: 800; border: none;")
+        job_id_val_hero.setStyleSheet("color: #111827; font-size: 22px; font-weight: 800; border: none;")
         header_layout.addWidget(job_id_val_hero)
 
         # 3. File Name (Pill Style)
@@ -1819,7 +1833,7 @@ class JobPopupDialog(QDialog):
         
         # Basic Info Details Grid (Clean Left-Right Layout)
         details_container = QVBoxLayout()
-        details_container.setSpacing(10) # Consistent gap between detail rows
+        details_container.setSpacing(4)  # Compact but readable row gap
         
         def add_detail_row(label_text, value_text):
             row_layout = QHBoxLayout()
@@ -1886,7 +1900,7 @@ class JobPopupDialog(QDialog):
         amount_label.setAlignment(Qt.AlignLeft)
         
         amount_val = QLabel(f"₹ {amount:.2f}")
-        amount_val.setStyleSheet("color: #059669; font-size: 22px; font-weight: 800; border: none;")
+        amount_val.setStyleSheet("color: #059669; font-size: 16px; font-weight: 800; border: none;")
         amount_val.setAlignment(Qt.AlignRight)
         
         amount_container.addWidget(amount_label, 1)
@@ -1900,13 +1914,15 @@ class JobPopupDialog(QDialog):
                 background-color: #F8FAFC;
                 border-radius: 12px;
                 border: 1px solid #E2E8F0;
-                margin-top: 8px;
             }
             QLabel {
                 border: none;
                 background: transparent;
             }
         """)
+        # Ensure styled background renders correctly and children cannot bleed outside frame
+        info_card.setAttribute(Qt.WA_StyledBackground, True)
+        info_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         info_card_layout = QVBoxLayout(info_card)
         info_card_layout.setContentsMargins(12, 12, 12, 12)
         info_card_layout.setSpacing(6)
@@ -1952,7 +1968,6 @@ class JobPopupDialog(QDialog):
             padding: 6px;
             font-size: 12px;
             font-weight: 600;
-            margin-bottom: 4px;
         """)
         self.printer_offline_label.hide()
         
@@ -1981,11 +1996,6 @@ class JobPopupDialog(QDialog):
         info_card_layout.addWidget(self.error_label)
         
         layout.addWidget(info_card)
-        
-        layout.addStretch()
-        
-        # Footer Action
-        footer_layout = QHBoxLayout()
         
         # Mode-aware button detection (before creating buttons)
         is_auto = hasattr(self.dashboard, 'auto_mode') and self.dashboard.auto_mode
@@ -2054,12 +2064,18 @@ class JobPopupDialog(QDialog):
         self.print_btn.clicked.connect(self.on_print_clicked)
         
         # Layout: [Cancel] [Print] in Manual Mode, or just [Print] in Auto Mode
+        layout.addStretch()
+
+        footer_layout = QHBoxLayout()
         footer_layout.addStretch()
+
         if not is_auto:
             footer_layout.addWidget(self.cancel_btn)
-            footer_layout.addSpacing(12)  # 12px gap between buttons
+            footer_layout.addSpacing(12)
+
         footer_layout.addWidget(self.print_btn)
         footer_layout.addStretch()
+
         layout.addLayout(footer_layout)
 
         # APPLY INITIAL STATE AFTER CREATING BUTTONS (FIX: Move from above)
@@ -2583,6 +2599,13 @@ class DashboardWindow(QMainWindow):
     def __init__(self, shopkeeper_data, on_logout=None):
         super().__init__()
         self._is_initializing = True
+        import time
+        self._last_activity_time = time.time()
+        QTimer.singleShot(0, self.showMaximized)
+        self.setMinimumSize(1024, 600)
+        self.sleep_watchdog = QTimer(self)
+        self.sleep_watchdog.timeout.connect(self._check_system_resume)
+        self.sleep_watchdog.start(5000)
         try:
             logger.info("Initializing DashboardWindow...")
             
@@ -4756,6 +4779,9 @@ class DashboardWindow(QMainWindow):
 
     def create_qr_page(self):
         """Shop QR page with shop info on left, QR code on right"""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -4923,13 +4949,16 @@ class DashboardWindow(QMainWindow):
         layout.addLayout(main_layout)
 
         layout.addStretch()
-        self.content_stack.addTab(page, "Shop QR")
-        
+        scroll.setWidget(page)
+        self.content_stack.addTab(scroll, "Shop QR")
         # Initialize edit mode state
         self.is_edit_mode = False
 
     def create_profile_page(self):
         """Profile page UI styled like the provided image (info card + QR panel)."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -4980,6 +5009,7 @@ class DashboardWindow(QMainWindow):
         self.shop_info_layout = self.shop_info_layout_profile
         self.setup_shop_info_display()
         details_layout.addWidget(self.shop_info_widget_profile)
+        details_layout.addStretch()
 
         # QR Code URL section removed (UI cleanup)
 
@@ -5073,7 +5103,8 @@ class DashboardWindow(QMainWindow):
         main_layout.addWidget(qr_card, 1)
         layout.addLayout(main_layout)
         layout.addStretch()
-        self.content_stack.addTab(page, "Profile")
+        scroll.setWidget(page)
+        self.content_stack.addTab(scroll, "Profile")
         self.edit_widgets = {}
     
     def copy_to_clipboard(self, text):
@@ -5551,7 +5582,9 @@ class DashboardWindow(QMainWindow):
         self.jobs_search = QLineEdit()
         self.jobs_search.setPlaceholderText("Search jobs...")
         self.jobs_search.textChanged.connect(self.load_print_jobs)
-        self.jobs_search.setFixedWidth(420)
+        self.jobs_search.setMinimumWidth(200)
+        self.jobs_search.setMaximumWidth(420)
+        self.jobs_search.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.jobs_search.setObjectName("jobsSearch")
         self.jobs_search.setStyleSheet(
             """
@@ -5854,6 +5887,9 @@ class DashboardWindow(QMainWindow):
 
     def create_pricing_page(self):
         """Create pricing configuration page"""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -6133,7 +6169,8 @@ class DashboardWindow(QMainWindow):
         layout.addWidget(pricing_card)
         layout.addStretch()
 
-        self.content_stack.addTab(page, "Set Pricing")
+        scroll.setWidget(page)
+        self.content_stack.addTab(scroll, "Set Pricing")
 
         # Load existing pricing
         self.load_pricing()
@@ -6384,6 +6421,10 @@ class DashboardWindow(QMainWindow):
     
     def create_settings_page(self):
         """Create Settings as a regular dashboard page with modern two-column layout."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -6836,11 +6877,12 @@ class DashboardWindow(QMainWindow):
         # Add stretch and move footer inside pricing card
         pricing_group_layout.addStretch()
         pricing_group_layout.addLayout(footer)
-
-        layout.addStretch()
         
         # Add page to content stack
-        self.content_stack.addTab(page, "Settings")
+        layout.addStretch()
+
+        scroll.setWidget(page)
+        self.content_stack.addTab(scroll, "Settings")
         
         # Populate widgets from central state
         self._sync_pricing_ui()
@@ -7402,6 +7444,12 @@ class DashboardWindow(QMainWindow):
         # Add button layout to main layout
         main_layout.addLayout(button_layout)
         
+        # Right-click context menu for Printer Settings
+        card.setContextMenuPolicy(Qt.CustomContextMenu)
+        card.customContextMenuRequested.connect(
+            lambda pos, pname=printer_name: self._show_printer_settings_menu(pos, pname, card)
+        )
+        
         return card
     
     def connect_connect_printers_printer(self, printer_name):
@@ -7464,6 +7512,229 @@ class DashboardWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error setting default printer: {e}")
             QMessageBox.warning(self, "Error", f"Failed to set default: {str(e)}")
+
+    def _show_printer_settings_menu(self, pos, printer_name, card):
+        """Show right-click context menu for printer settings"""
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #e5e7eb;
+                border-radius: 6px;
+                padding: 4px;
+            }
+            QMenu::item {
+                color: #111827;
+                padding: 8px 20px;
+                font-size: 13px;
+                font-family: 'Segoe UI', sans-serif;
+            }
+            QMenu::item:selected {
+                background-color: #3b82f6;
+                color: #ffffff;
+                border-radius: 4px;
+            }
+        """)
+        settings_action = QAction("Printer Settings", self)
+        settings_action.triggered.connect(lambda: self._open_printer_settings_dialog(printer_name))
+        menu.addAction(settings_action)
+        self._suspend_jobs_refresh = True
+        menu.exec_(card.mapToGlobal(pos))
+        self._suspend_jobs_refresh = False
+
+    def _open_printer_settings_dialog(self, printer_name):
+        """Open printer capability settings dialog"""
+        try:
+            from shared.database import Printer, SessionLocal
+            
+            # Load current saved config
+            db = SessionLocal()
+            printer_record = db.query(Printer).filter(
+                Printer.printer_name == printer_name,
+                Printer.shop_id == self.shopkeeper_data['shop_id']
+            ).first()
+            
+            current_duplex = getattr(printer_record, 'duplex_override', None) if printer_record else None
+            current_color = getattr(printer_record, 'color_override', None) if printer_record else None
+            db.close()
+            
+            # Create dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Printer Settings")
+            dialog.setFixedWidth(380)
+            dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+            dialog.setStyleSheet("""
+                QDialog { background-color: #ffffff; }
+                QLabel { font-family: 'Segoe UI', sans-serif; }
+                QRadioButton { font-size: 13px; font-family: 'Segoe UI', sans-serif; padding: 4px; }
+            """)
+            
+            layout = QVBoxLayout(dialog)
+            layout.setContentsMargins(24, 20, 24, 20)
+            layout.setSpacing(16)
+            
+            # Title
+            title = QLabel("⚙️  Printer Settings")
+            title.setFont(QFont("Segoe UI", 15, QFont.Bold))
+            title.setStyleSheet("color: #111827;")
+            layout.addWidget(title)
+            
+            # Printer name
+            pname_label = QLabel(printer_name)
+            pname_label.setStyleSheet("color: #6b7280; font-size: 13px;")
+            layout.addWidget(pname_label)
+            
+            # Divider
+            div = QFrame()
+            div.setFixedHeight(1)
+            div.setStyleSheet("background-color: #e5e7eb;")
+            layout.addWidget(div)
+            
+            # Auto-detect note
+            note = QLabel("⚠️  Settings auto-detected. Change only if needed.")
+            note.setStyleSheet("""
+                background-color: #fef3c7;
+                color: #92400e;
+                border: 1px solid #fde68a;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-size: 12px;
+            """)
+            note.setWordWrap(True)
+            layout.addWidget(note)
+            
+            # --- DUPLEX SECTION ---
+            duplex_label = QLabel("Duplex Mode:")
+            duplex_label.setFont(QFont("Segoe UI", 13, QFont.Bold))
+            duplex_label.setStyleSheet("color: #111827; margin-top: 4px;")
+            layout.addWidget(duplex_label)
+            
+            from PyQt5.QtWidgets import QButtonGroup
+            duplex_group = QButtonGroup(dialog)
+            
+            duplex_auto = QRadioButton("Auto Detect")
+            duplex_on = QRadioButton("Force Enable")
+            duplex_off = QRadioButton("Disable")
+            
+            for rb in [duplex_auto, duplex_on, duplex_off]:
+                rb.setStyleSheet("QRadioButton { color: #374151; }")
+                duplex_group.addButton(rb)
+                layout.addWidget(rb)
+            
+            # Set current value
+            if current_duplex is None:
+                duplex_auto.setChecked(True)
+            elif current_duplex:
+                duplex_on.setChecked(True)
+            else:
+                duplex_off.setChecked(True)
+            
+            # --- COLOR SECTION ---
+            color_label = QLabel("Color Mode:")
+            color_label.setFont(QFont("Segoe UI", 13, QFont.Bold))
+            color_label.setStyleSheet("color: #111827; margin-top: 8px;")
+            layout.addWidget(color_label)
+            
+            color_group = QButtonGroup(dialog)
+            
+            color_auto = QRadioButton("Auto Detect")
+            color_on = QRadioButton("Force Color")
+            color_off = QRadioButton("Force B&W Only")
+            
+            for rb in [color_auto, color_on, color_off]:
+                rb.setStyleSheet("QRadioButton { color: #374151; }")
+                color_group.addButton(rb)
+                layout.addWidget(rb)
+            
+            # Set current value
+            if current_color is None:
+                color_auto.setChecked(True)
+            elif current_color:
+                color_on.setChecked(True)
+            else:
+                color_off.setChecked(True)
+            
+            # Divider
+            div2 = QFrame()
+            div2.setFixedHeight(1)
+            div2.setStyleSheet("background-color: #e5e7eb; margin-top: 4px;")
+            layout.addWidget(div2)
+            
+            # Buttons
+            btn_layout = QHBoxLayout()
+            btn_layout.addStretch()
+            
+            cancel_btn = QPushButton("Cancel")
+            cancel_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f3f4f6;
+                    color: #374151;
+                    border: 1px solid #d1d5db;
+                    padding: 8px 20px;
+                    border-radius: 6px;
+                    font-weight: 500;
+                    font-size: 13px;
+                }
+                QPushButton:hover { background-color: #e5e7eb; }
+            """)
+            cancel_btn.clicked.connect(dialog.reject)
+            
+            save_btn = QPushButton("Save")
+            save_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #3b82f6;
+                    color: #ffffff;
+                    border: none;
+                    padding: 8px 20px;
+                    border-radius: 6px;
+                    font-weight: 600;
+                    font-size: 13px;
+                }
+                QPushButton:hover { background-color: #2563eb; }
+            """)
+            
+            def save_settings():
+                import traceback
+                try:
+                    from shared.database import Printer, SessionLocal
+                    new_duplex = None if duplex_auto.isChecked() else (True if duplex_on.isChecked() else False)
+                    new_color = None if color_auto.isChecked() else (True if color_on.isChecked() else False)
+                    
+                    db2 = SessionLocal()
+                    record = db2.query(Printer).filter(
+                        Printer.printer_name == printer_name,
+                        Printer.shop_id == self.shopkeeper_data['shop_id']
+                    ).first()
+                    if record:
+                        record.duplex_override = new_duplex
+                        record.color_override = new_color
+                        db2.commit()
+                        logger.info(f"Saved printer settings for '{printer_name}': duplex={new_duplex}, color={new_color}")
+                    else:
+                        logger.warning(f"Printer record not found for '{printer_name}' — settings not saved")
+                    db2.close()
+                    
+                    # Full cache reset
+                    self.printer_manager.printer_capabilities = {}
+                    
+                    self.show_success_toast(f"Settings saved for {printer_name}")
+                    dialog.accept()
+                except Exception as e:
+                    traceback.print_exc()
+                    logger.error(f"Error saving printer settings: {e}")
+                    QMessageBox.warning(dialog, "Error", f"Failed to save: {str(e)}")
+            
+            save_btn.clicked.connect(save_settings)
+            btn_layout.addWidget(cancel_btn)
+            btn_layout.addSpacing(8)
+            btn_layout.addWidget(save_btn)
+            layout.addLayout(btn_layout)
+            
+            dialog.exec_()
+            
+        except Exception as e:
+            logger.error(f"Error opening printer settings dialog: {e}")
+            QMessageBox.warning(self, "Error", f"Failed to open settings: {str(e)}")
     
     def update_connect_printers_status(self):
         """Update printer status in real-time on Connect Printers page"""
@@ -8294,8 +8565,6 @@ class DashboardWindow(QMainWindow):
                     self._active_job_popups.remove(popup)
                 self.is_popup_active = False
                 logger.debug(f"Popup for job {job.job_id} closed/finished. Guard reset.")
-                # Resume queue for dismissed popups
-                QTimer.singleShot(100, self.display_next_popup)
                 
             popup.accepted.connect(on_pickup_accepted)
             popup.finished.connect(on_popup_finished)
@@ -9711,6 +9980,36 @@ class DashboardWindow(QMainWindow):
 
         t = threading.Thread(target=shutdown_cleanup, daemon=True)
         t.start()
+
+    def _check_system_resume(self):
+        import time
+        current_time = time.time()
+        if current_time - self._last_activity_time > 20:
+            logger.info("System resume detected - recovering services")
+            self._recover_after_sleep()
+        self._last_activity_time = current_time
+
+    def _recover_after_sleep(self):
+        try:
+            logger.info("Starting sleep recovery...")
+            if hasattr(self, 'printer_manager') and self.printer_manager:
+                try:
+                    self.printer_manager.reinitialize_printer()
+                except Exception as e:
+                    logger.error(f"Printer recovery failed: {e}")
+            if hasattr(self, 'websocket_client') and self.websocket_client:
+                try:
+                    self.websocket_client.reconnect()
+                except Exception as e:
+                    logger.error(f"WebSocket reconnect failed: {e}")
+            try:
+                self.refresh_job_list()
+            except Exception as e:
+                logger.error(f"Job refresh failed: {e}")
+            logger.info("Sleep recovery completed")
+        except Exception as e:
+            logger.error(f"Sleep recovery failed: {e}")
+
     
     def _stop_all_timers(self):
         """Stop all QTimer instances"""

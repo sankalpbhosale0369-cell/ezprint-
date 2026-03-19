@@ -302,7 +302,7 @@ def save_license_cache(response: dict) -> None:
 # FUNCTION 5: verify_startup_license
 # ═══════════════════════════════════════════════════════════════════════════
 
-def verify_startup_license(email: str | None = None) -> bool:
+def verify_startup_license(email: str | None = None, shop_name: str | None = None) -> bool:
     """
     Top-level license gate called from ``main.py`` at startup.
 
@@ -318,7 +318,7 @@ def verify_startup_license(email: str | None = None) -> bool:
         Always returns ``True`` on unexpected errors (fail-open).
     """
     try:
-        result = check_license(email)
+        result = check_license(email, shop_name=shop_name)
         status = result.get("status", "").lower()
         days_remaining = result.get("days_remaining")
 
