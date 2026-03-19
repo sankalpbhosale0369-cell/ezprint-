@@ -38,3 +38,16 @@ test_output*.txt
 test_result.txt
 test_url_results.txt
 web_interface/static/images/qr_codes/ 
+
+# Build artifacts
+dist_nuitka/
+main.build/
+installer_output/
+dist/
+build/
+
+# Agent
+.agent/
+
+# Startup signal
+shopkeeper_app/startup_signal.tmp
