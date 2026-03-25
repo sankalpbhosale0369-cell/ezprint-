@@ -1528,20 +1528,20 @@ body:has(#xeroxScannerSection:not([style*="display: none"])) {
 
 .preview-viewport {
     width: 100%;
-    aspect-ratio: 3/4;
-    max-height: 60vh;
+    aspect-ratio: unset;
+    max-height: none;
     display: flex;
     align-items: center;
     justify-content: center;
     background: #FAFAFA;
     border: 1px solid #E2E8F0;
     border-radius: 8px;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .preview-viewport img {
-    max-width: 100%;
-    max-height: 100%;
+    width: 100%;
+    height: auto;
     object-fit: contain;
     transition: transform 0.3s ease;
 }
@@ -2769,8 +2769,8 @@ body.modal-open {
     }
 
     .preview-viewport {
-        aspect-ratio: 3/4;
-        max-height: 65vh;
+        aspect-ratio: unset;
+        max-height: none;
     }
 
     .preview-actions.compact {

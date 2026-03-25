@@ -159,7 +159,37 @@ class PrinterManager:
                 logger.error(f"Failed to download cloud file: {e}")
                 raise Exception(f"Failed to download file from cloud: {str(e)}")
         else:
-            # File is local, return as-is
+            # Check if it's a server-relative path like /uploads/<shop_id>/<file>
+            # These are saved by the local fallback on the Flask/Render backend
+            # and are NOT valid on the Windows client machine.
+            if file_path.startswith('/uploads/'):
+                BACKEND_BASE_URL = "https://ezprint-backend.onrender.com"
+                full_url = f"{BACKEND_BASE_URL}{file_path}"
+                logger.info(f"Detected server-relative path, converting to full URL: {full_url}")
+                
+                try:
+                    temp_dir = os.path.join(tempfile.gettempdir(), 'ezprint_downloads')
+                    os.makedirs(temp_dir, exist_ok=True)
+                    
+                    url_filename = file_path.split('/')[-1]
+                    local_path = os.path.join(temp_dir, url_filename)
+                    
+                    response = requests.get(full_url, stream=True, timeout=30)
+                    response.raise_for_status()
+                    
+                    with open(local_path, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                    
+                    logger.info(f"Downloaded server-relative file to: {local_path}")
+                    return local_path
+                    
+                except Exception as e:
+                    logger.error(f"Failed to download server-relative file: {e}")
+                    raise Exception(f"Failed to download file from server: {str(e)}")
+            
+            # True local Windows path (C:\...) — return as-is
             return file_path
     
     def _initialize_printer_capabilities(self):
@@ -1402,10 +1432,8 @@ class PrinterManager:
         try:
             # Build print-settings
             opts = []
-            if orientation == 'Landscape':
-                opts.append('landscape')
-            else:
-                opts.append('portrait')
+            opts.append('noscale')
+            
             if print_side == 'Double':
                 # Default to long-edge duplex; printers may override if unsupported
                 opts.append('duplexlong')
@@ -1505,7 +1533,7 @@ class PrinterManager:
                 img = im.convert('RGB')
                 if color_mode == 'Black & White':
                     img = img.convert('L').convert('RGB')
-                if orientation == 'Landscape' and img.width < img.height:
+                if orientation == 'Landscape' and img.width > img.height:
                     img = img.rotate(90, expand=True)
                 elif orientation == 'Portrait' and img.width > img.height:
                     img = img.rotate(-90, expand=True)

@@ -1017,11 +1017,11 @@ def generate_final_print_pdf(file_path, file_type, page_size="A4", orientation="
                 file_type = 'pdf'
         
         # If no layout and no page range, return the (possibly converted) file
-        if layout_pages == 1 and not page_range.strip():
+        #if layout_pages == 1 and not page_range.strip():
             # NOTE: If it was a URL, we might want to return the original URL 
             # if no processing was needed. But for safety, returning the local path 
             # or normalized PDF is fine as downstream also handles them.
-            return pdf_path
+            #return pdf_path
         
         # Step 1: Open PDF document
         try:
@@ -1058,9 +1058,14 @@ def generate_final_print_pdf(file_path, file_type, page_size="A4", orientation="
         
         # Get page dimensions
         page_w, page_h = get_page_size_dimensions(page_size)
-        if orientation == 'Landscape':
-            page_w, page_h = page_h, page_w
         
+        
+        # 2-per-sheet → output page landscape hona chahiye (printer driver behavior)
+        if layout_pages == 2:
+            if page_w < page_h:  # portrait hai → landscape karo
+                page_w, page_h = page_h, page_w
+        
+        logger.info(f"DEBUG OUTPUT: page_w={page_w:.1f} page_h={page_h:.1f} layout_pages={layout_pages}")
         # Create output PDF
         output_pdf = str(Path(file_path).with_name(f"final_print_{uuid.uuid4().hex[:8]}.pdf"))
         from reportlab.pdfgen import canvas as rl_canvas
@@ -1106,27 +1111,25 @@ def generate_final_print_pdf(file_path, file_type, page_size="A4", orientation="
                         page = pdf_document[page_idx]
                         page_rect = page.rect
                         
-                        # Apply orientation transformation (matching preview)
-                        zoom_factor = 2.0  # High-res for print
-                        if orientation == "Landscape":
-                            if page_rect.width < page_rect.height:
-                                mat = fitz.Matrix(0, 1, -1, 0, page_rect.height, 0) * fitz.Matrix(zoom_factor, zoom_factor)
-                            else:
-                                mat = fitz.Matrix(zoom_factor, zoom_factor)
-                        else:
-                            if page_rect.width > page_rect.height:
-                                mat = fitz.Matrix(0, -1, 1, 0, 0, page_rect.width) * fitz.Matrix(zoom_factor, zoom_factor)
-                            else:
-                                mat = fitz.Matrix(zoom_factor, zoom_factor)
+                        zoom_factor = 2.0
+                        mat = fitz.Matrix(zoom_factor, zoom_factor)
                         
                         # Render page to image
                         pix = page.get_pixmap(matrix=mat, alpha=False)
                         img_data = pix.tobytes("png")
                         img = Image.open(io.BytesIO(img_data))
-                        
-                        # Apply color mode
                         img = apply_color_mode(img, color_mode)
-                        
+
+                        img_w, img_h = img.size
+                        # Use original PDF page orientation (more reliable)
+                        page_is_portrait = page_rect.height > page_rect.width
+
+                        if orientation == "Landscape" and page_is_portrait:
+                            img = img.rotate(90, expand=True)
+
+                        elif orientation == "Portrait" and not page_is_portrait:
+                            img = img.rotate(90, expand=True)           
+
                         page_images.append(img)
                     else:
                         page_images.append(None)  # Out of bounds, use placeholder
@@ -1138,14 +1141,15 @@ def generate_final_print_pdf(file_path, file_type, page_size="A4", orientation="
             if layout_pages == 1:
                 # Single page per sheet
                 if page_images[0]:
-                    # Save image temporarily for ReportLab
-                    tmp_img_path = str(Path(file_path).with_name(f"print_img_{uuid.uuid4().hex[:8]}.png"))
-                    page_images[0].save(tmp_img_path, "PNG")
-                    img_reader = ImageReader(tmp_img_path)
-                    
                     # Calculate size to fit page while maintaining aspect ratio
                     img_w, img_h = page_images[0].size
                     img_aspect = img_w / img_h
+
+                    # Save AFTER rotation
+                    tmp_img_path = str(Path(file_path).with_name(f"print_img_{uuid.uuid4().hex[:8]}.png"))
+                    page_images[0].save(tmp_img_path, "PNG")
+                    img_reader = ImageReader(tmp_img_path)
+
                     if cell_w / cell_h > img_aspect:
                         draw_w = cell_h * img_aspect
                         draw_h = cell_h
@@ -1174,14 +1178,15 @@ def generate_final_print_pdf(file_path, file_type, page_size="A4", orientation="
                     r = idx // cols
                     col = idx % cols
                     
-                    # Save image temporarily
-                    tmp_img_path = str(Path(file_path).with_name(f"print_img_{uuid.uuid4().hex[:8]}.png"))
-                    page_img.save(tmp_img_path, "PNG")
-                    img_reader = ImageReader(tmp_img_path)
-                    
                     # Calculate size to fit cell while maintaining aspect ratio
                     img_w, img_h = page_img.size
                     img_aspect = img_w / img_h
+
+                    # Save AFTER rotation
+                    tmp_img_path = str(Path(file_path).with_name(f"print_img_{uuid.uuid4().hex[:8]}.png"))
+                    page_img.save(tmp_img_path, "PNG")
+                    img_reader = ImageReader(tmp_img_path)
+
                     if cell_w / cell_h > img_aspect:
                         draw_w = cell_h * img_aspect
                         draw_h = cell_h
@@ -2274,64 +2279,53 @@ def cleanup_temp_files(file_path):
         print(f"Error cleaning up file {file_path}: {e}")
 
 def combine_images_to_pdf(image_paths, output_pdf_path):
-    """
-    Combine multiple images into a single PDF file.
-    
-    Args:
-        image_paths (list): List of paths to image files
-        output_pdf_path (str): Path to save the output PDF
-    
-    Returns:
-        str: Path to the created PDF file
-    """
     try:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.utils import ImageReader
-        
-        # Create PDF
+        from PIL import ImageOps
+
         c = canvas.Canvas(output_pdf_path, pagesize=A4)
-        width, height = A4
-        
+
         for image_path in image_paths:
             try:
-                # Open image
                 img = Image.open(image_path)
-                
-                # Convert to RGB if necessary
+                img = ImageOps.exif_transpose(img)  # Fix EXIF rotation
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
-                
-                # Calculate scaling to fit A4 while maintaining aspect ratio
+
                 img_width, img_height = img.size
-                scale_w = width / img_width
-                scale_h = height / img_height
-                scale = min(scale_w, scale_h)
-                
-                scaled_width = img_width * scale
-                scaled_height = img_height * scale
-                
-                # Center image on page
-                x = (width - scaled_width) / 2
-                y = (height - scaled_height) / 2
-                
-                # Save image to temporary bytes
+
+                # Fix orientation — match page to image
+                if img_width > img_height:
+                    page_w, page_h = A4[1], A4[0]  # landscape
+                else:
+                    page_w, page_h = A4              # portrait
+
+                c.setPageSize((page_w, page_h))  # per page apply
+
+                scale = min(page_w / img_width, page_h / img_height)
+                scaled_w = img_width * scale
+                scaled_h = img_height * scale
+                x = (page_w - scaled_w) / 2
+                y = (page_h - scaled_h) / 2
+
                 img_bytes = io.BytesIO()
                 img.save(img_bytes, format='PNG')
                 img_bytes.seek(0)
-                
-                # Draw image on PDF page
-                c.drawImage(ImageReader(img_bytes), x, y, width=scaled_width, height=scaled_height)
+
+                c.drawImage(ImageReader(img_bytes), x, y,
+                            width=scaled_w, height=scaled_h)
                 c.showPage()
-                
+
             except Exception as e:
-                print(f"Error processing image {image_path}: {e}")
+                logger.error(f"Error processing image {image_path}: {e}")
                 continue
-        
+
         c.save()
         return output_pdf_path
-        
+
     except Exception as e:
-        print(f"Error creating PDF from images: {e}")
+        logger.error(f"Error creating PDF from images: {e}")
         raise
 
 def cleanup_old_uploads(max_age_hours: int = 72):

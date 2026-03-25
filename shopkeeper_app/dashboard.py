@@ -6,6 +6,7 @@ logger = logging.getLogger(__name__)
 import sys
 import os
 import win32print
+from PyQt5.QtCore import pyqtSlot
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QLabel, QPushButton, QTableWidget, 
                            QTableWidgetItem, QHeaderView, QMessageBox, 
@@ -2270,7 +2271,72 @@ class JobPopupDialog(QDialog):
                 self.accept()
             except Exception:
                 pass
+    
+    def on_view_clicked(self):        # ← 4 spaces
+        try:
+            logger.info(f"DEBUG PREVIEW: color_mode='{self.job.color_mode}' file_type='{self.job.file_type}'")                          # ← 8 spaces
+            import threading
+            def generate_preview():
+                try:
+                    from shared.file_processor import generate_final_print_pdf
+                    from shared.file_processor import ensure_local_path
+                    local_path, is_temp = ensure_local_path(self.job.file_path)
+                    preview_pdf = generate_final_print_pdf(
+                        file_path=local_path,
+                        file_type=self.job.file_type or 'pdf',
+                        page_size=self.job.page_size or 'A4',
+                        orientation=self.job.orientation or 'Portrait',
+                        layout_pages=self.job.layout_pages or 1,
+                        color_mode=self.job.color_mode or 'Color',
+                        page_range=self.job.page_range or ''
+                    )
+                    from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
+                    QMetaObject.invokeMethod(self, "_show_preview_window",
+                        Qt.QueuedConnection, Q_ARG(str, preview_pdf))
+                except Exception as e:
+                    from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
+                    QMetaObject.invokeMethod(self, "_on_preview_error",
+                        Qt.QueuedConnection, Q_ARG(str, str(e)))
+            threading.Thread(target=generate_preview, daemon=True).start()
+        except Exception as e:
+            logger.error(f"Preview error: {e}")
 
+    @pyqtSlot(str)
+    def _show_preview_window(self, preview_pdf_path):
+        try:
+            logger.info(f"DEBUG PREVIEW FILE: {preview_pdf_path}")
+            import os, sys, subprocess
+            if sys.platform.startswith('win'):
+                os.startfile(preview_pdf_path)
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', preview_pdf_path])
+            else:
+                subprocess.Popen(['xdg-open', preview_pdf_path])
+        except Exception as e:
+            logger.error(f"Show preview error: {e}")
+
+    @pyqtSlot(str)
+    def _on_preview_error(self, error_msg):
+        QMessageBox.warning(self, "Preview Failed", f"Could not generate preview:\n{error_msg}")
+
+    def contextMenuEvent(self, event):
+        try:
+            from PyQt5.QtWidgets import QMenu, QAction
+            from PyQt5.QtGui import QCursor
+            menu = QMenu(self)
+            menu.setStyleSheet("""
+                QMenu { background-color: #ffffff; border: 1px solid #e5e7eb;
+                    border-radius: 6px; padding: 4px; }
+                QMenu::item { color: #111827; padding: 8px 20px; font-size: 13px; }
+                QMenu::item:selected { background-color: #6366f1; color: #ffffff; border-radius: 4px; }
+            """)
+            preview_action = QAction("Preview (Final Print)", self)
+            preview_action.triggered.connect(self.on_view_clicked)
+            menu.addAction(preview_action)
+            menu.exec_(QCursor.pos())
+        except Exception as e:
+            logger.error(f"Context menu error: {e}")
+     
 
     def update_status(self, status):
         """External bridge to update popup status and UI state dynamically"""

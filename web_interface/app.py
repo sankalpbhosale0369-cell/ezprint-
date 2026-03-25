@@ -482,149 +482,111 @@ def create_preview():
         # Get file type
         file_type = file.filename.rsplit('.', 1)[1].lower()
 
-        # Perform color detection for SMART BILLING if color mode is Color
+        # Get total pages BEFORE deleting temp file
+        total_document_pages = get_page_count(str(temp_path), file_type)
+        
+        # Parse page range
+        selected_pages = list(range(1, total_document_pages + 1))
+        page_range_error = None
+        if page_range:
+            try:
+                selected_pages = parse_page_range(page_range, total_document_pages) or selected_pages
+            except Exception as e:
+                page_range_error = str(e)
+
+        # Color detection for billing
         color_page_dict = None
         if color_mode.lower() != 'black & white':
             color_page_dict = classify_color_pages(str(temp_path), file_type)
-        
-        # LAYOUT FIX: Generate individual page previews first (before layout combining)
-        # We need to filter by page range BEFORE combining into layout sheets
-        total_document_pages, individual_page_previews = generate_multi_page_previews(
-            str(temp_path), 
-            file_type, 
-            page_size, 
-            orientation, 
-            color_mode,
-            1  # Generate individual pages first (layout_pages=1)
-        )
-        
-        # Clean up temp file
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        
-        if individual_page_previews and total_document_pages > 0:
-            # PAGE RANGE FIX: Parse and filter previews based on page range
-            selected_pages = None
-            page_range_error = None
-            
-            if page_range:
-                try:
-                    # Parse page range (e.g., "2-9" or "1-3,5,7-8")
-                    selected_pages = parse_page_range(page_range, total_document_pages)
-                    if not selected_pages:
-                        # Invalid range - all pages out of bounds
-                        page_range_error = f"Page range '{page_range}' contains no valid pages (document has {total_document_pages} pages)"
-                        logger.warning(page_range_error)
-                        selected_pages = list(range(1, total_document_pages + 1))  # Fallback to all pages
-                    elif len(selected_pages) < len(parse_page_range(page_range, 9999)):
-                        # Some pages were filtered out (out of bounds)
-                        original_count = len(parse_page_range(page_range, 9999))
-                        page_range_error = f"Page range '{page_range}' contains {original_count - len(selected_pages)} invalid page(s) (document has {total_document_pages} pages)"
-                        logger.info(page_range_error)
-                except ValueError as e:
-                    # Invalid format (e.g., non-numeric characters)
-                    page_range_error = f"Invalid page range format: {str(e)}"
-                    logger.error(f"Error parsing page range '{page_range}': {e}")
-                    selected_pages = list(range(1, total_document_pages + 1))  # Fallback to all pages
-                except Exception as e:
-                    # Unexpected error parsing, fallback to all pages
-                    page_range_error = f"Error processing page range: {str(e)}"
-                    logger.error(f"Unexpected error parsing page range '{page_range}': {e}")
-                    selected_pages = list(range(1, total_document_pages + 1))  # Fallback to all pages
-            else:
-                # No page range specified, show all pages
-                selected_pages = list(range(1, total_document_pages + 1))
-            
-            # Filter preview paths based on selected pages (1-based to 0-based index conversion)
-            filtered_preview_paths = []
-            for page_num in selected_pages:
-                if 1 <= page_num <= len(individual_page_previews):
-                    # Page numbers are 1-based, array indices are 0-based
-                    filtered_preview_paths.append(individual_page_previews[page_num - 1])
-            
-            # LAYOUT FIX: Combine filtered pages into layout sheets if layout_pages > 1
-            if layout_pages > 1 and filtered_preview_paths:
-                # Get preview directory from first preview path
-                preview_dir = Path(filtered_preview_paths[0]).parent
-                num_sheets, sheet_preview_paths = combine_pages_into_layout_sheets(
-                    filtered_preview_paths,
-                    layout_pages,
-                    preview_dir
-                )
-                # Use sheet previews
-                final_preview_paths = sheet_preview_paths
-                total_preview_pages = num_sheets
-            else:
-                # No layout combining needed, use filtered individual pages
-                final_preview_paths = filtered_preview_paths
-                total_preview_pages = len(filtered_preview_paths)
-            
-            # Convert preview paths to URLs
-            preview_urls = []
-            for preview_path in final_preview_paths:
-                preview_filename = os.path.basename(preview_path)
-                preview_url = f'/api/preview/{preview_filename}'
-                preview_urls.append(preview_url)
-            
-            # Calculate SMART PER-PAGE COLOR BILLING amount for preview display
-            total_amount = 0
-            color_sheets = 0
-            bw_sheets = 0
-            
-            if shop_id:
-                # Get pricing
-                pricing = db_session().query(ShopPricing).filter(ShopPricing.shop_id == shop_id).first()
-                if pricing:
-                    pricing_dict = {
-                        'bw_single': pricing.bw_single, 'bw_double': pricing.bw_double,
-                        'color_single': pricing.color_single, 'color_double': pricing.color_double
-                    }
-                else:
-                    pricing_dict = {
-                        'bw_single': 2.0, 'bw_double': 1.5,
-                        'color_single': 10.0, 'color_double': 8.0
-                    }
-                
-                billing = calculate_billing(
-                    color_mode=color_mode,
-                    print_side=request.form.get('print_side', 'Single'),
-                    copies=int(request.form.get('copies', 1)),
-                    layout_pages=layout_pages,
-                    selected_pages=selected_pages,
-                    color_page_dict=color_page_dict,
-                    pricing=pricing_dict
-                )
-                
-                total_amount = billing['total_amount']
-                color_sheets = billing['color_sheets']
-                bw_sheets = billing['bw_sheets']
 
-            # LAYOUT FIX: Return results with correct page counts
-            # total_preview_pages = number of preview sheets/pages to show
-            # total_document_pages = total pages in original document
-            # selected_pages_count = number of document pages selected (after page range filter)
-            response_data = {
-                'success': True,
-                'total_pages': total_preview_pages,  # Number of preview sheets/pages (after layout combining)
-                'total_document_pages': total_document_pages,  # Total pages in original document
-                'selected_document_pages': len(selected_pages),  # Number of document pages selected (after page range)
-                'layout_pages': layout_pages,  # Pages per sheet setting
-                'previews': preview_urls,
-                'total_amount': total_amount,  # Calculated amount for frontend display
-                'color_sheets': color_sheets,  # Count of color sheets/pages
-                'bw_sheets': bw_sheets,        # Count of BW sheets/pages
-                'selected_pages': selected_pages,  # For debugging
-                # Backward compatibility: also return first preview URL
-                'preview_url': preview_urls[0] if preview_urls else None
+        # Generate final print PDF (SAME pipeline as actual print)
+        from shared.file_processor import generate_final_print_pdf
+        import fitz as _fitz
+
+        final_pdf = generate_final_print_pdf(
+            file_path=str(temp_path),
+            file_type=file_type,
+            page_size=page_size,
+            orientation=orientation,
+            layout_pages=layout_pages,
+            color_mode=color_mode,
+            page_range=page_range
+        )
+
+        # Cleanup temp file
+        if os.path.exists(str(temp_path)):
+            os.remove(str(temp_path))
+
+        # Convert PDF pages to preview images
+        preview_urls = []
+        preview_dir = UPLOAD_FOLDER / "previews"
+        preview_dir.mkdir(exist_ok=True)
+
+        doc = _fitz.open(final_pdf)
+        total_preview_pages = len(doc)
+
+        for page_num in range(total_preview_pages):
+            page = doc[page_num]
+            scale = 2.0 if layout_pages > 1 else 1.5
+            mat = _fitz.Matrix(scale, scale)
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            preview_filename = f"preview_{uuid.uuid4().hex[:8]}_sheet_{page_num+1}.png"
+            preview_path = preview_dir / preview_filename
+            pix.save(str(preview_path))
+            preview_urls.append(f'/api/preview/{preview_filename}')
+
+        doc.close()
+
+        # Cleanup final PDF
+        try:
+            os.remove(final_pdf)
+        except Exception:
+            pass
+
+        # Calculate billing
+        total_amount = 0
+        color_sheets = 0
+        bw_sheets = 0
+
+        if shop_id:
+            pricing = db_session().query(ShopPricing).filter(ShopPricing.shop_id == shop_id).first()
+            pricing_dict = {
+                'bw_single': pricing.bw_single if pricing else 2.0,
+                'bw_double': pricing.bw_double if pricing else 1.5,
+                'color_single': pricing.color_single if pricing else 10.0,
+                'color_double': pricing.color_double if pricing else 8.0
             }
-            
-            # Include warning if page range had issues
-            if page_range_error:
-                response_data['page_range_warning'] = page_range_error
-            
-            return jsonify(response_data)
-        else:
-            return jsonify({'error': 'Failed to create preview'}), 500
+            billing = calculate_billing(
+                color_mode=color_mode,
+                print_side=request.form.get('print_side', 'Single'),
+                copies=int(request.form.get('copies', 1)),
+                layout_pages=layout_pages,
+                selected_pages=selected_pages,
+                color_page_dict=color_page_dict,
+                pricing=pricing_dict
+            )
+            total_amount = billing['total_amount']
+            color_sheets = billing['color_sheets']
+            bw_sheets = billing['bw_sheets']
+
+        response_data = {
+            'success': True,
+            'total_pages': total_preview_pages,
+            'total_document_pages': total_document_pages,
+            'selected_document_pages': len(selected_pages),
+            'layout_pages': layout_pages,
+            'previews': preview_urls,
+            'total_amount': total_amount,
+            'color_sheets': color_sheets,
+            'bw_sheets': bw_sheets,
+            'selected_pages': selected_pages,
+            'preview_url': preview_urls[0] if preview_urls else None
+        }
+
+        if page_range_error:
+            response_data['page_range_warning'] = page_range_error
+
+        return jsonify(response_data)
             
     except Exception as e:
         logger.error(f"Preview error: {e}")
