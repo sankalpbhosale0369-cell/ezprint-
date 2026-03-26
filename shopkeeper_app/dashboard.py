@@ -4099,10 +4099,15 @@ class DashboardWindow(QMainWindow):
     def update_dashboard_kpis(self, all_jobs=None):
         """Update Dashboard KPI cards using background worker (OFF UI thread)"""
         try:
-            # Check for existing worker to prevent overlap
-            if self.kpi_worker and self.kpi_worker.isRunning():
-                logger.info("KPI refresh already in progress, skipping...")
-                return
+            # Guard: skip if previous worker still running
+            if hasattr(self, 'kpi_worker') and self.kpi_worker is not None:
+                try:
+                    if self.kpi_worker.isRunning():
+                        logger.info("KPI refresh already in progress, skipping...")
+                        return
+                except RuntimeError:
+                    # Qt C++ object deleted — reset safely
+                    self.kpi_worker = None
 
             # Prepare data for worker
             shop_id = self.shopkeeper_data.get('shop_id')
@@ -9912,6 +9917,7 @@ class DashboardWindow(QMainWindow):
                 # ApiClient.refresh_token() already calls set_session_token internally
                 # Sync with AuthManager's client as well
                 self.auth_manager.api_client.set_session_token(new_token)
+                self.session_token = new_token
                 logger.info("Session token refreshed successfully")
             else:
                 logger.warning(f"Session token refresh failed: {error}")

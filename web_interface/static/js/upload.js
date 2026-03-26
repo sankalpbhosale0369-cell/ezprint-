@@ -195,6 +195,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let statusCheckInterval = null;
     let currentShopId = null;
     let _uploadInFlight = false; // Double-submit guard
+    let printPreviewAbortController = null; // AbortController for PRINT preview requests
 
     // Multi-page preview state (BUG FIX: Added to support proper page navigation)
     let previewUrls = [];  // Array of all preview URLs
@@ -469,7 +470,10 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // Setup customization listeners for dynamic preview updates
+    // Uses a flag to prevent duplicate listener binding
     function setupCustomizationListeners() {
+        if (window._printCustomizationListenersAttached) return;
+
         const customizationInputs = [copies, pageSize, orientation, printSide, colorMode, layoutPages];
 
         customizationInputs.forEach(input => {
@@ -511,6 +515,7 @@ document.addEventListener('DOMContentLoaded', function () {
             });
 
             // Also update on blur (when user leaves the field)
+            // FIX: Route through updatePreviewWithDelay instead of calling generatePreview directly
             pageRangeInput.addEventListener('blur', function () {
                 if (pageRangeTimeout) {
                     clearTimeout(pageRangeTimeout);
@@ -520,13 +525,15 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (!pageRangeVal || isValidPageRange(pageRangeVal)) {
                     showPageRangeError(''); // Clear error
                     if (currentFile) {
-                        generatePreview(false);
+                        updatePreviewWithDelay();
                     }
                 } else {
                     showPageRangeError('Invalid format. Use: 1-3, 5, 7-9');
                 }
             });
         }
+
+        window._printCustomizationListenersAttached = true;
     }
 
     // Setup pricing functionality
@@ -839,9 +846,15 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // Update preview with delay to prevent excessive requests
+    // DEBOUNCE FIX: 500ms debounce + cancels any in-flight PRINT preview request
     function updatePreviewWithDelay() {
         if (previewTimeout) {
             clearTimeout(previewTimeout);
+        }
+        // Cancel any in-flight print preview request immediately on new input
+        if (printPreviewAbortController) {
+            printPreviewAbortController.abort();
+            printPreviewAbortController = null;
         }
         previewTimeout = setTimeout(() => {
             if (currentFile) {
@@ -922,10 +935,17 @@ document.addEventListener('DOMContentLoaded', function () {
             formData.append(key, printSettings[key]);
         });
 
+        // Cancel any previous in-flight PRINT preview request
+        if (printPreviewAbortController) {
+            printPreviewAbortController.abort();
+        }
+        printPreviewAbortController = new AbortController();
+
         // Create preview
         fetch('/api/preview', {
             method: 'POST',
-            body: formData
+            body: formData,
+            signal: printPreviewAbortController.signal
         })
             .then(response => response.json())
             .then(data => {
@@ -1068,6 +1088,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             })
             .catch(error => {
+                // Silently ignore aborted requests (user changed settings again)
+                if (error.name === 'AbortError') {
+                    console.info('PRINT preview request aborted (superseded by newer request)');
+                    return;
+                }
                 console.error('Preview error:', error);
                 if (showLoading) {
                     alert('Failed to create preview: ' + error.message);
