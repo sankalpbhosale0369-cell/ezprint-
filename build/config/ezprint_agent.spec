@@ -33,22 +33,15 @@ hiddenimports = [
     'PyQt5.QtCore',
     'PyQt5.QtGui',
     'PyQt5.QtWidgets',
-    'PyQt5.QtWebEngineWidgets',  # For charts (if used)
     'PyQt5.QtPrintSupport',
 
-    # Database — deprecated in the SaaS client; the FastAPI backend owns
-    # all persistence. Left here as a safety net in case an unpurged code
-    # path still imports SQLAlchemy; strip once dashboard.py is fully DB-free.
+    # SQLAlchemy — legacy local cache (shared/database.py); strip when
+    # dashboard.py is fully migrated to the API.
     'sqlalchemy',
     'sqlalchemy.orm',
     'sqlalchemy.orm.session',
-    'sqlalchemy.orm.sessionmaker',
     'sqlalchemy.ext.declarative',
-    'sqlalchemy.ext.declarative.base',
-    'sqlalchemy.sql',
-    'sqlalchemy.sql.func',
     'sqlalchemy.engine',
-    'sqlalchemy.engine.create',
     'sqlalchemy.dialects',
     'sqlalchemy.dialects.sqlite',
     'sqlalchemy.dialects.sqlite.pysqlite',
@@ -75,11 +68,9 @@ hiddenimports = [
     'PIL.ImageDraw',
     'PIL.ImageFont',
     'PIL.ImageWin',
-    'PIL._imaging',
 
-    # PDF Processing
-    'fitz',  # PyMuPDF
-    '_fitz',
+    # PDF Processing (PyMuPDF)
+    'fitz',
 
     # Windows Printing
     'win32print',
@@ -87,37 +78,33 @@ hiddenimports = [
     'win32con',
     'win32gui',
     'win32com',
+    'win32ui',
     'pywintypes',
     'pythoncom',
 
-    # Networking — new SaaS backend talks FastAPI + native WebSocket.
-    # The legacy Flask-SocketIO path has been removed.
-    'socket',
-    'websocket',  # websocket-client (sync, used by ws_client.py)
+    # Networking
+    'websocket',
     'websocket._app',
     'requests',
     'urllib3',
     'httpx',
-    'h11',
     'certifi',
-    'anyio',
     'idna',
 
     # Utilities
     'qrcode',
-    'cryptography',
     'bcrypt',
-    '_cffi_backend',
     'dotenv',
-    'python_dotenv',
 
-    # JSON/Data
+    # stdlib (sometimes missed by PyInstaller's static analysis)
     'json',
     'uuid',
     'datetime',
     'pathlib',
     'tempfile',
     'io',
+    'threading',
+    'subprocess',
 ]
 
 # ======================================================================
