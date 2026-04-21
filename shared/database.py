@@ -2,7 +2,7 @@
 Database models and connection for EzPrint MVP
 """
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, Float, func
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Boolean, Float, func, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from shared.config import DATABASE_URL
@@ -76,7 +76,15 @@ class PrintJob(Base):
     assets_deleted = Column(Boolean, default=False)
     assets_delete_scheduled = Column(Boolean, default=False)
     assets_delete_attempted_at = Column(DateTime, nullable=True)
-    
+
+    # Indexes for performance optimization
+    __table_args__ = (
+        Index('ix_print_jobs_shop_id', 'shop_id'),
+        Index('ix_print_jobs_status', 'status'),
+        Index('ix_print_jobs_shop_status', 'shop_id', 'status'),  # Composite index for filtered queries
+        Index('ix_print_jobs_created_at', 'created_at'),
+    )
+
     def __init__(self, shop_id, filename, file_path, file_size, file_type, **kwargs):
         self.job_id = str(uuid.uuid4())
         self.shop_id = shop_id
@@ -105,6 +113,13 @@ class Printer(Base):
     duplex_override = Column(Boolean, nullable=True, default=None)
     color_override = Column(Boolean, nullable=True, default=None)
     bw_single_override = Column(Boolean, nullable=True, default=True)
+
+    # Indexes for performance optimization
+    __table_args__ = (
+        Index('ix_printers_shop_id', 'shop_id'),
+        Index('ix_printers_shop_active', 'shop_id', 'is_active'),
+    )
+
 class SystemLog(Base):
     """System logging model"""
     __tablename__ = 'system_logs'
@@ -163,6 +178,48 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def create_tables():
     """Create all database tables"""
     Base.metadata.create_all(bind=engine)
+
+def _create_indexes_if_missing(engine, dialect_name):
+    """
+    Create performance indexes if they don't already exist.
+    Safe to run multiple times - checks for existing indexes first.
+    """
+    from sqlalchemy import text, inspect
+
+    inspector = inspect(engine)
+
+    # Define indexes to create: (table_name, index_name, columns, is_unique)
+    indexes_to_create = [
+        ('print_jobs', 'ix_print_jobs_shop_id', ['shop_id'], False),
+        ('print_jobs', 'ix_print_jobs_status', ['status'], False),
+        ('print_jobs', 'ix_print_jobs_shop_status', ['shop_id', 'status'], False),
+        ('print_jobs', 'ix_print_jobs_created_at', ['created_at'], False),
+        ('printers', 'ix_printers_shop_id', ['shop_id'], False),
+        ('printers', 'ix_printers_shop_active', ['shop_id', 'is_active'], False),
+    ]
+
+    for table_name, index_name, columns, is_unique in indexes_to_create:
+        if table_name not in inspector.get_table_names():
+            continue
+
+        # Check if index already exists
+        existing_indexes = {idx['name'] for idx in inspector.get_indexes(table_name)}
+        if index_name in existing_indexes:
+            continue
+
+        # Create the index
+        try:
+            with engine.connect() as conn:
+                col_list = ', '.join(columns)
+                unique_clause = 'UNIQUE ' if is_unique else ''
+                sql = f"CREATE {unique_clause}INDEX {index_name} ON {table_name} ({col_list})"
+                conn.execute(text(sql))
+                conn.commit()
+                print(f"Created index {index_name} on {table_name}")
+        except Exception as e:
+            # Index might already exist with different name, or other issue
+            print(f"Warning creating index {index_name}: {e}")
+
 
 def migrate_schema():
     """
@@ -326,6 +383,9 @@ def migrate_schema():
                         print(f"Added {col_name} to printers table")
                     except Exception as e:
                         print(f"Warning adding {col_name} to printers: {e}")
+
+        # Create indexes for performance optimization
+        _create_indexes_if_missing(engine, dialect_name)
 
     except Exception as e:
         # Do not crash app on migration; log to stdout for MVP

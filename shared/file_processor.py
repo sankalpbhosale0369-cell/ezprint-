@@ -43,7 +43,7 @@ def ensure_local_path(file_path):
         return file_path, False
         
     try:
-        # Download file (using plain GET as these are public or signed Cloudinary URLs)
+        # Download file (plain GET — the backend hands out presigned MinIO URLs).
         response = requests.get(file_path, stream=True, timeout=30, headers={})
         response.raise_for_status()
         
@@ -70,159 +70,10 @@ def ensure_local_path(file_path):
         print(f"Error downloading from URL {file_path}: {e}")
         return file_path, False
 
-def _compress_file_for_upload(file_path, file_extension, target_size_bytes=9 * 1024 * 1024):
-    """
-    Silently compress file if too large for Cloudinary.
-    Returns compressed file path (may be same as input if compression not needed/possible).
-    """
-    try:
-        current_size = os.path.getsize(file_path)
-        if current_size <= target_size_bytes:
-            return file_path  # No compression needed
-
-        logger.info(f"File too large ({current_size} bytes), compressing...")
-
-        if file_extension in ['jpg', 'jpeg', 'png', 'bmp', 'tiff', 'gif']:
-            # Compress image
-            img = Image.open(file_path)
-            img.load()  # Force load to catch corrupt images early
-            compressed_path = file_path + '_compressed.jpg'
-
-            # Convert to RGB with white background for transparency
-            if img.mode in ('RGBA', 'LA'):
-                bg = Image.new("RGB", img.size, (255, 255, 255))
-                bg.paste(img, mask=img.split()[-1])
-                img = bg
-            elif img.mode in ('P',):
-                img = img.convert('RGB')
-
-            # Try progressively lower quality until under limit
-            for quality in [85, 70, 55, 40, 25]:
-                img.save(compressed_path, 'JPEG', quality=quality, optimize=True)
-                if os.path.getsize(compressed_path) <= target_size_bytes:
-                    logger.info(f"Compressed to {os.path.getsize(compressed_path)} bytes at quality={quality}")
-                    return compressed_path
-
-            # If still too large, resize image with max attempts
-            w, h = img.size
-            max_attempts = 10
-            attempt = 0
-            while os.path.getsize(compressed_path) > target_size_bytes and w > 500 and attempt < max_attempts:
-                w = int(w * 0.8)
-                h = int(h * 0.8)
-                img_resized = img.resize((w, h), Image.LANCZOS)
-                img_resized.save(compressed_path, 'JPEG', quality=40, optimize=True)
-                attempt += 1
-
-            return compressed_path
-
-        elif file_extension == 'pdf':
-            # For PDF — try using PyMuPDF to reduce image quality inside PDF
-            try:
-                import fitz
-                doc = fitz.open(file_path)
-                compressed_path = file_path + '_compressed.pdf'
-                # Save with reduced image quality
-                doc.save(compressed_path, deflate=True, garbage=4, clean=True)
-                doc.close()
-                if os.path.getsize(compressed_path) <= target_size_bytes:
-                    logger.info(f"PDF compressed to {os.path.getsize(compressed_path)} bytes")
-                    return compressed_path
-            except Exception as e:
-                logger.warning(f"PDF compression failed: {e}")
-
-        # Could not compress — return original
-        return file_path
-
-    except Exception as e:
-        logger.warning(f"Compression failed (non-fatal): {e}")
-        return file_path  # Return original on error
-
-
-def save_uploaded_file(file, shop_id):
-    """
-    Save uploaded file to Cloudinary cloud storage.
-    Layer 1: Auto-compress if file too large
-    Layer 2: Cloudinary upload
-    Layer 3: Fallback to local if Cloudinary fails
-    """
-    if file and allowed_file(file.filename):
-        from shared.cloudinary_helper import upload_file_to_cloudinary
-
-        # Generate unique filename
-        file_extension = file.filename.rsplit('.', 1)[1].lower()
-        unique_filename = f"{uuid.uuid4()}.{file_extension}"
-
-        # Save to temporary location first
-        temp_dir = tempfile.gettempdir()
-        temp_path = os.path.join(temp_dir, unique_filename)
-        file.save(temp_path)
-
-        # Get file size
-        file_size = os.path.getsize(temp_path)
-
-        # LAYER 1: Auto-compress if file too large (silent, no user friction)
-        MAX_CLOUDINARY_SIZE = 9 * 1024 * 1024  # 9MB safe limit
-        compressed_path = temp_path
-        if file_size > MAX_CLOUDINARY_SIZE:
-            compressed_path = _compress_file_for_upload(temp_path, file_extension)
-            compressed_size = os.path.getsize(compressed_path)
-            reduction = ((file_size - compressed_size) / file_size) * 100
-            logger.info(f"File compressed: {file_size} → {compressed_size} bytes ({reduction:.1f}% reduction)")
-
-        try:
-            safe_shop_id = re.sub(r'[^A-Za-z0-9_-]', '_', (shop_id or 'unknown'))[:64]
-
-            # LAYER 2: Upload to Cloudinary
-            try:
-                cloudinary_url_result, public_id = upload_file_to_cloudinary(
-                    compressed_path, safe_shop_id, os.path.basename(compressed_path)
-                )
-                logger.info(f"Cloudinary upload successful")
-                return cloudinary_url_result, file.filename, file_size, file_extension, public_id
-
-            except Exception as cloud_err:
-                # LAYER 3: Cloudinary failed — fallback to local storage
-                logger.warning(f"Cloudinary upload failed ({cloud_err}), falling back to local storage")
-
-                # Save locally as fallback
-                local_upload_dir = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    'uploads', safe_shop_id
-                )
-                os.makedirs(local_upload_dir, exist_ok=True)
-                local_file_path = os.path.join(local_upload_dir, unique_filename)
-
-                # Copy compressed file to local uploads
-                import shutil
-                shutil.copy2(compressed_path, local_file_path)
-
-                logger.info(f"File saved locally as fallback: {local_file_path}")
-                # Return local path as URL (None public_id = local file)
-                local_url = f"/uploads/{safe_shop_id}/{unique_filename}"
-                logger.info(f"Local fallback URL: {local_url}")
-                return local_url, file.filename, file_size, file_extension, None
-
-        finally:
-            # Cleanup compressed file first (if different from original)
-            if compressed_path != temp_path and os.path.exists(compressed_path):
-                try:
-                    os.remove(compressed_path)
-                except Exception:
-                    pass
-            # Cleanup original temp file
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception:
-                    pass
-
-    return None, None, None, None, None
-
 def get_page_count(file_path, file_type):
     """
     Get page count for different file types.
-    Handles both local paths and Cloudinary URLs.
+    Handles both local paths and remote URLs (presigned MinIO downloads).
     """
     # ROOT FIX: Ensure we have a local path for processing
     local_path, is_temp = ensure_local_path(file_path)
@@ -265,7 +116,7 @@ def get_page_count(file_path, file_type):
 def create_preview_image_with_layout(file_path, file_type, page_range="1", page_size="A4", orientation="Portrait", layout_pages=1, layout_type="normal", color_mode="Color"):
     """
     Create a preview image for the document with layout arrangement
-    Handles both local paths and Cloudinary URLs.
+    Handles both local paths and remote URLs (presigned MinIO downloads).
     """
     # ROOT FIX: Ensure local path
     local_path, is_temp = ensure_local_path(file_path)
@@ -422,7 +273,7 @@ def create_preview_image_with_layout(file_path, file_type, page_range="1", page_
 def create_preview_image(file_path, file_type, page_range="1", page_size="A4", orientation="Portrait", color_mode="Color"):
     """
     Create a preview image for the document.
-    Handles both local paths and Cloudinary URLs.
+    Handles both local paths and remote URLs (presigned MinIO downloads).
     """
     # ROOT FIX: Ensure local path
     local_path, is_temp = ensure_local_path(file_path)
@@ -997,7 +848,7 @@ def create_generic_grid_preview(single_page_img, rows, cols, gap=20, bg_color='w
 def generate_final_print_pdf(file_path, file_type, page_size="A4", orientation="Portrait", layout_pages=1, color_mode="Color", page_range=""):
     """
     Generate final print-ready PDF that matches preview output EXACTLY.
-    Handles both local paths and Cloudinary URLs.
+    Handles both local paths and remote URLs (presigned MinIO downloads).
     """
     # ROOT FIX: Ensure local path
     src_local_path, is_temp = ensure_local_path(file_path)
@@ -1487,7 +1338,7 @@ def get_image_size_for_page_size(page_size):
 def normalize_document_for_preview(file_path, file_type):
     """
     Normalization step for non-PDF documents to ensure they can be previewed.
-    Handles both local paths and Cloudinary URLs.
+    Handles both local paths and remote URLs (presigned MinIO downloads).
     """
     if file_type == 'pdf':
         return file_path
@@ -1858,7 +1709,7 @@ def combine_pages_into_layout_sheets(page_preview_paths, layout_pages, preview_d
 def generate_multi_page_previews(file_path, file_type, page_size="A4", orientation="Portrait", color_mode="Color", layout_pages=1):
     """
     Generate preview images for ALL pages of a document.
-    Handles both local paths and Cloudinary URLs.
+    Handles both local paths and remote URLs (presigned MinIO downloads).
     """
     # ROOT FIX: Ensure local path
     local_path, is_temp = ensure_local_path(file_path)
@@ -2131,7 +1982,7 @@ def create_fallback_preview_page(preview_path, page_num, total_pages, file_type=
 def classify_color_pages(file_path, file_type):
     """
     Classify each page of a document as 'color' or 'bw'.
-    Handles both local paths and Cloudinary URLs.
+    Handles both local paths and remote URLs (presigned MinIO downloads).
     """
     # ROOT FIX: Ensure local path
     local_path, is_temp = ensure_local_path(file_path)
