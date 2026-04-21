@@ -41,6 +41,18 @@ hiddenimports = [
     # path still imports SQLAlchemy; strip once dashboard.py is fully DB-free.
     'sqlalchemy',
     'sqlalchemy.orm',
+    'sqlalchemy.orm.session',
+    'sqlalchemy.orm.sessionmaker',
+    'sqlalchemy.ext.declarative',
+    'sqlalchemy.ext.declarative.base',
+    'sqlalchemy.sql',
+    'sqlalchemy.sql.func',
+    'sqlalchemy.engine',
+    'sqlalchemy.engine.create',
+    'sqlalchemy.dialects',
+    'sqlalchemy.dialects.sqlite',
+    'sqlalchemy.dialects.sqlite.pysqlite',
+    'sqlalchemy.pool',
 
     # File Processing
     'PyPDF2',

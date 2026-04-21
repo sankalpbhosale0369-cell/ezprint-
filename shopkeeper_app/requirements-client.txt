@@ -12,4 +12,5 @@ pillow>=10,<12
 qrcode>=7.4,<8
 bcrypt>=4.0,<5
 python-dotenv>=1.0,<2
+sqlalchemy>=2.0,<3
 pywin32>=306 ; sys_platform == "win32"
