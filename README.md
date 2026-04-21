@@ -1,120 +1,107 @@
-# EzPrint MVP - Hybrid Printing System
+# EzPrint — SaaS printing platform
 
-## Project Structure
+EzPrint lets customers upload documents from their phone or laptop and pick
+them up printed at a local print shop. The platform is split into two
+independently-deployable services:
+
+- **`ezprint-backend/`** — FastAPI + Postgres + Redis + MinIO. Hosts the
+  customer upload flow, multi-tenant shop data, authentication, and the
+  real-time WebSocket that fans jobs out to print shops. Runs as Docker
+  Compose (local / single VM) or a managed stack in production.
+- **`shopkeeper_app/`** — PyQt5 Windows desktop agent (`EzPrintAgent.exe`).
+  Connects to the backend over HTTPS + WebSocket, watches for jobs, pulls
+  files via presigned URLs, and drives local printers through `pywin32`.
+
+Supporting code lives in `shared/` (file processing, auto-update, printing
+helpers) and is consumed by the desktop agent.
+
+> The legacy Flask + Socket.IO + Cloudinary stack (`web_interface/`,
+> `Dockerfile`, `start.py`, etc.) has been removed. Everything it did now
+> lives inside `ezprint-backend/`.
+
+## Repository layout
+
 ```
-ezprint_MVP/
-├── shopkeeper_app/          # Desktop application for shopkeepers
-│   ├── main.py             # Main application entry point
-│   ├── auth.py             # Authentication system
-│   ├── dashboard.py        # Dashboard UI
-│   ├── printer_manager.py  # Printer connection and management
-│   └── websocket_client.py # WebSocket client for real-time communication
-├── web_interface/          # Customer web interface
-│   ├── app.py              # Flask web application
-│   ├── templates/          # HTML templates
-│   ├── static/             # CSS, JS, and assets
-│   └── upload_handler.py   # File upload and processing
-├── shared/                 # Shared components
-│   ├── database.py         # Database models and connection
-│   ├── qr_generator.py     # QR code generation
-│   ├── file_processor.py   # Document processing utilities
-│   └── config.py           # Configuration settings
-├── logs/                   # Application logs
-└── uploads/                # Temporary file storage
+ezprint-backend/          FastAPI service (Docker Compose: api, worker, postgres, redis, minio)
+  app/                    routers, schemas, workers, tenancy helpers
+  docker/                 Dockerfile + MinIO init
+  docker-compose.yml      dev stack
+  docker-compose.prod.yml prod stack with Caddy + TLS
+
+shopkeeper_app/           Windows desktop agent (PyQt5)
+  api_client.py           requests-based REST client (access/refresh/agent JWTs)
+  ws_client.py            websocket-client + Qt signal bridge
+  auth.py                 API facade, persists session.json
+  dashboard.py            main UI (KPIs, jobs, pricing, printers)
+  printer_manager.py      Windows print dispatch + heartbeats
+  tests/                  unit tests (mock-based)
+  requirements-client.txt runtime deps for PyInstaller
+  E2E_CHECKLIST.md        manual verification against the dev stack
+
+shared/                   agent-only helpers (file processing, auto-update, printing)
+build/                    PyInstaller spec, NSIS installer, CI scripts
 ```
 
-## Quick Start
+## Quick start
 
-### Windows Users
-1. Double-click `start.bat` to automatically install dependencies and start the shopkeeper app
+### 1. Bring up the backend
 
-### Manual Installation
+```bash
+cd ezprint-backend
+cp .env.example .env         # edit as needed
+docker compose up -d --build
+curl -fsS http://localhost:8000/healthz   # {"status":"ok"}
+docker compose exec api python -m app.scripts.seed_demo
+```
 
-1. **Install Python Dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 2. Run the desktop agent against it
 
-2. **Start with Menu Options:**
-   ```bash
-   python start.py
-   ```
-   
-   Choose from the menu:
-   - Option 1: Start Web Interface only
-   - Option 2: Start Shopkeeper App only  
-   - Option 3: Start Both (recommended)
-   - Option 4: Exit
+```bash
+cd shopkeeper_app
+uv venv && uv pip install -r requirements-client.txt
+export EZPRINT_API_BASE_URL=http://localhost:8000
+python main.py                 # log in with the demo shopkeeper
+```
 
-3. **Start Shopkeeper App Directly:**
-   ```bash
-   python start_shopkeeper.py
-   ```
-   
-   This directly launches the shopkeeper desktop application.
+`EZPRINT_WS_URL` is derived automatically (`http://…` → `ws://…/ws/agent`,
+`https://…` → `wss://…/ws/agent`). Set it explicitly only if you want the
+agent to talk to a host different from `EZPRINT_API_BASE_URL`.
 
-### Individual Components
+### 3. End-to-end walkthrough
 
-1. **Run the Desktop Application:**
-   ```bash
-   cd shopkeeper_app
-   python main.py
-   ```
+Follow `shopkeeper_app/E2E_CHECKLIST.md` — it covers login, dashboard,
+printer registration, a real customer upload, WebSocket-driven status
+transitions, and failure paths (expired tokens, cleaned-up assets).
 
-2. **Run the Web Interface:**
-   ```bash
-   cd web_interface
-   python app.py
-   ```
+## Tests
 
-## Features
+```bash
+# Agent unit tests (mocks only, no network)
+ezprint-backend/.venv/bin/python -m pytest shopkeeper_app/tests -q
 
-### Shopkeeper Side
-- Desktop application with login/signup
-- Automatic Shop ID and QR code generation
-- Printer connection and management
-- Real-time job monitoring dashboard
-- Print job management
-
-### Customer Side
-- QR code scanning to access shop upload page
-- File upload (PDF, DOCX, Images)
-- Print customization options:
-  - Page Range
-  - Copies
-  - Page Size (A4, A3, Letter, Legal)
-  - Orientation (Portrait, Landscape)
-  - Print Side (Single, Double)
-  - Color Mode (Black & White, Color)
-- Document preview
-- Real-time printing confirmation
-
-### System Features
-- Secure WebSocket communication
-- Real-time job updates
-- Comprehensive logging
-- Error handling
-- Print job history
-
-## Usage
-
-1. **Shopkeeper Setup:**
-   - Launch the desktop application
-   - Sign up for a new account
-   - Connect your printer
-   - Share the generated QR code with customers
-
-2. **Customer Usage:**
-   - Scan the shop's QR code
-   - Upload document
-   - Customize print settings
-   - Preview document
-   - Confirm and print
+# Backend suite
+cd ezprint-backend && pytest -q
+```
 
 ## Configuration
 
-Edit `shared/config.py` to modify:
-- Database settings
-- WebSocket ports
-- File upload limits
-- Print settings
+- **Backend**: `ezprint-backend/.env` (database URL, JWT secrets, MinIO creds,
+  Redis URL). See `ezprint-backend/.env.example`.
+- **Agent**: `shared/config.py` reads a handful of env vars — the important
+  ones are `EZPRINT_API_BASE_URL`, `EZPRINT_WS_URL`, `EZPRINT_LICENSE_ENABLED`,
+  and the auto-update channel settings.
+
+## Building the Windows agent
+
+```bash
+cd build
+python scripts/build_windows.py         # PyInstaller one-file build
+# → build/output/release/EzPrintAgent-<version>.exe + NSIS installer
+```
+
+See `build/README.md` for prerequisites (NSIS, signing tools) and
+`build/TESTING.md` for the QA checklist.
+
+## License
+
+Proprietary — © EzPrint. See `build/assets/license.txt`.

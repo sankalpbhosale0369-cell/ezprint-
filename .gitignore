@@ -44,10 +44,41 @@ dist_nuitka/
 main.build/
 installer_output/
 dist/
-build/
+build/__pycache__/
+*.spec
+
+# New build system outputs
+build/output/dist/
+build/output/build/
+build/output/release/
+build/output/*.exe
+build/output/*.zip
+build/output/*.log
+build/output/checksums.txt
 
 # Agent
 .agent/
+
+# IDE metadata
+.cursor/
+.idea/
+.vscode/
+
+# Virtual environments
+.venv/
+ezprint-backend/.venv/
+
+# Test output artifacts
+tests/*.txt
+*_report.txt
+*_results.txt
+test_report.txt
+tmp_trace_output.txt
+
+# Binaries
+*.exe
+*.cmd
+SumatraPDF-settings.txt
 
 # Startup signal
 shopkeeper_app/startup_signal.tmp
