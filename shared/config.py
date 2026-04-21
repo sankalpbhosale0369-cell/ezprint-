@@ -65,7 +65,48 @@ EZPRINT_LICENSE_ENABLED = os.environ.get(
 # ``shared.database`` still drives a handful of dashboard code paths on the
 # client. New code must NOT add DB calls here — read/write through the API
 # instead. The backend owns the real Postgres.
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///fallback.db")
+#
+# The DB file location is resolved to a stable absolute path so the
+# PyInstaller-packaged exe doesn't create it in an unwritable install dir
+# (e.g. C:\Program Files\EzPrint) or lose it between runs when CWD changes.
+def _default_sqlite_url() -> str:
+    if sys.platform.startswith("win"):
+        base = os.environ.get("APPDATA") or str(Path.home())
+        data_dir = Path(base) / "EzPrint"
+    elif sys.platform == "darwin":
+        data_dir = Path.home() / "Library" / "Application Support" / "EzPrint"
+    else:
+        data_dir = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "EzPrint"
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        data_dir = BASE_DIR
+
+    db_path = data_dir / "ezprint_local.db"
+
+    # One-shot migration: older builds wrote `fallback.db` next to the CWD
+    # (or the exe). If the new AppData file does not exist yet but an old
+    # one does, move it over so activated printers / history are preserved.
+    if not db_path.exists():
+        legacy_candidates = [
+            Path.cwd() / "fallback.db",
+            BASE_DIR / "fallback.db",
+        ]
+        if getattr(sys, "frozen", False):
+            legacy_candidates.insert(0, Path(sys.executable).parent / "fallback.db")
+        for legacy in legacy_candidates:
+            try:
+                if legacy.exists() and legacy.resolve() != db_path.resolve():
+                    import shutil
+                    shutil.copy2(str(legacy), str(db_path))
+                    break
+            except Exception:
+                continue
+
+    return f"sqlite:///{db_path.as_posix()}"
+
+
+DATABASE_URL = os.environ.get("DATABASE_URL", _default_sqlite_url())
 
 
 # ── File handling (local preview / n-up PDF generation) ───────────────────────

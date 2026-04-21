@@ -4720,60 +4720,72 @@ class DashboardWindow(QMainWindow):
                 today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 
                 for job in completed_jobs:
-                    # A. Search Filter (Job ID or File Name)
-                    job_id_match = search_term in job.job_id.lower()
-                    filename_match = search_term in (job.filename or "").lower()
-                    if search_term and not (job_id_match or filename_match):
+                    try:
+                        # Defensive: legacy rows may have NULL job_id / status
+                        # from older schemas; don't let a single bad row break
+                        # the whole list.
+                        job_id_lower = (job.job_id or "").lower()
+                        filename_lower = (job.filename or "").lower()
+                        job_id_match = bool(search_term) and search_term in job_id_lower
+                        filename_match = bool(search_term) and search_term in filename_lower
+                        if search_term and not (job_id_match or filename_match):
+                            continue
+
+                        job_date = job.completed_at
+                        if date_filter != "All":
+                            if not job_date:
+                                continue
+                            if date_filter == "Today":
+                                if job_date < today_start:
+                                    continue
+                            elif date_filter == "Yesterday":
+                                yesterday_start = today_start - timedelta(days=1)
+                                if not (yesterday_start <= job_date < today_start):
+                                    continue
+                            elif date_filter == "This Week":
+                                days_since_monday = today_start.weekday()
+                                week_start = today_start - timedelta(days=days_since_monday)
+                                if job_date < week_start:
+                                    continue
+                            elif date_filter == "This Month":
+                                month_start = today_start.replace(day=1)
+                                if job_date < month_start:
+                                    continue
+
+                        filtered_jobs.append(job)
+                    except Exception as row_err:
+                        logger.warning(
+                            "Skipping malformed payment row job_id=%s: %s",
+                            getattr(job, 'job_id', '<unknown>'), row_err,
+                        )
                         continue
-                        
-                    # B. Date Filter (using completed_at)
-                    job_date = job.completed_at
-                    if date_filter != "All":
-                        if not job_date: continue
-                        
-                        # Handle naive vs aware datetime if necessary
-                        if job_date.tzinfo is not None:
-                            # If job_date is aware, make today_start aware too for comparison
-                            # Simplified check matching Print Jobs logic
-                            pass
-                            
-                        if date_filter == "Today":
-                            if job_date < today_start: continue
-                        elif date_filter == "Yesterday":
-                            yesterday_start = today_start - timedelta(days=1)
-                            if not (yesterday_start <= job_date < today_start): continue
-                        elif date_filter == "This Week":
-                            # Monday start
-                            days_since_monday = today_start.weekday()
-                            week_start = today_start - timedelta(days=days_since_monday)
-                            if job_date < week_start: continue
-                        elif date_filter == "This Month":
-                            month_start = today_start.replace(day=1)
-                            if job_date < month_start: continue
-                    
-                    filtered_jobs.append(job)
 
                 if not filtered_jobs:
-                    # Show empty state
                     empty_label = QLabel("No completed payments found matching filters" if search_term or date_filter != "All" else "No completed payments found")
                     empty_label.setAlignment(Qt.AlignCenter)
                     empty_label.setStyleSheet("color: #9ca3af; font-size: 14px; padding: 40px;")
                     self.payments_layout.addWidget(empty_label)
                 else:
-                    # Create payment card for each filtered job
                     for job in filtered_jobs:
-                        payment_card = self.create_payment_card(job)
-                        self.payments_layout.addWidget(payment_card)
-                
-                # 2. Add a SINGLE stretch at the end
+                        try:
+                            payment_card = self.create_payment_card(job)
+                            self.payments_layout.addWidget(payment_card)
+                        except Exception as card_err:
+                            logger.warning(
+                                "Failed to render payment card job_id=%s: %s",
+                                getattr(job, 'job_id', '<unknown>'), card_err,
+                            )
+                            continue
+
                 self.payments_layout.addStretch()
-                
+
             finally:
                 db.close()
-                
+
         except Exception as e:
-            logger.error(f"Error loading payments data: {e}")
-            # Show error message
+            # Full traceback so recurring "Error loading payment history"
+            # banners can actually be diagnosed from logs/ezprint.log.
+            logger.error("Error loading payments data: %s", e, exc_info=True)
             error_label = QLabel("Error loading payment history")
             error_label.setAlignment(Qt.AlignCenter)
             error_label.setStyleSheet("color: #ef4444; font-size: 14px; padding: 40px;")
@@ -8314,46 +8326,69 @@ class DashboardWindow(QMainWindow):
             return
         try:
             ok, data, err = self.api_client.list_jobs(limit=20)
-            if not ok or not data:
+            if not ok:
+                # Backend unreachable / auth expired — don't mutate local
+                # cache, and don't spam the user. Just note it for diagnosis.
+                logger.debug("list_jobs non-ok during poll: %s", err)
+                return
+            if not data:
                 return
             jobs_list = data if isinstance(data, list) else data.get("jobs", [])
-            shop_id = self.shopkeeper_data.get('shop_id', '')
+            if not isinstance(jobs_list, list):
+                logger.warning("list_jobs returned unexpected payload shape: %s", type(jobs_list).__name__)
+                return
+
+            shop_id = (self.shopkeeper_data or {}).get('shop_id', '')
             inserted = 0
             for jd in jobs_list:
-                jid = jd.get("job_id")
-                if not jid:
+                try:
+                    if not isinstance(jd, dict):
+                        continue
+                    jid = jd.get("job_id")
+                    if not jid:
+                        continue
+                    existing = self.db.query(PrintJob).filter(PrintJob.job_id == jid).first()
+                    if existing:
+                        continue
+                    backend_status = (jd.get("status") or "Pending").strip()
+                    local_status = "Pending" if backend_status == "Queued" else backend_status
+                    pj = PrintJob(
+                        shop_id=shop_id,
+                        filename=jd.get("filename", "unknown"),
+                        file_path=jd.get("filename", ""),
+                        file_size=jd.get("file_size") or 0,
+                        file_type=jd.get("file_type", "pdf"),
+                        job_id=jid,
+                        copies=jd.get("copies", 1),
+                        page_size=jd.get("page_size", "A4"),
+                        orientation=jd.get("orientation", "Portrait"),
+                        print_side=jd.get("print_side", "Single"),
+                        color_mode=jd.get("color_mode", "Black & White"),
+                        layout_pages=jd.get("layout_pages", 1),
+                        layout_type=jd.get("layout_type", "normal"),
+                        total_pages=jd.get("total_pages"),
+                        amount=jd.get("amount"),
+                        status=local_status,
+                    )
+                    self.db.add(pj)
+                    inserted += 1
+                except Exception as row_err:
+                    logger.warning("skip bad job payload from API: %s", row_err)
                     continue
-                existing = self.db.query(PrintJob).filter(PrintJob.job_id == jid).first()
-                if existing:
-                    continue
-                backend_status = (jd.get("status") or "Pending").strip()
-                local_status = "Pending" if backend_status == "Queued" else backend_status
-                pj = PrintJob(
-                    shop_id=shop_id,
-                    filename=jd.get("filename", "unknown"),
-                    file_path=jd.get("filename", ""),
-                    file_size=jd.get("file_size") or 0,
-                    file_type=jd.get("file_type", "pdf"),
-                    job_id=jid,
-                    copies=jd.get("copies", 1),
-                    page_size=jd.get("page_size", "A4"),
-                    orientation=jd.get("orientation", "Portrait"),
-                    print_side=jd.get("print_side", "Single"),
-                    color_mode=jd.get("color_mode", "Black & White"),
-                    layout_pages=jd.get("layout_pages", 1),
-                    layout_type=jd.get("layout_type", "normal"),
-                    total_pages=jd.get("total_pages"),
-                    amount=jd.get("amount"),
-                    status=local_status,
-                )
-                self.db.add(pj)
-                inserted += 1
+
             if inserted:
-                self.db.commit()
-                logger.info(f"API poll: inserted {inserted} new job(s) into local cache")
+                try:
+                    self.db.commit()
+                    logger.info(f"API poll: inserted {inserted} new job(s) into local cache")
+                except Exception as commit_err:
+                    self.db.rollback()
+                    logger.error("Failed to commit synced jobs: %s", commit_err, exc_info=True)
         except Exception as e:
-            self.db.rollback()
-            logger.error(f"_sync_jobs_from_api failed: {e}")
+            try:
+                self.db.rollback()
+            except Exception:
+                pass
+            logger.error("_sync_jobs_from_api failed: %s", e, exc_info=True)
     
     def start_polling_fallback(self):
         """Start polling fallback from main thread"""
@@ -8905,30 +8940,41 @@ class DashboardWindow(QMainWindow):
             
             filtered_jobs = []
             for j in query:
-                # Search by job id or filename
-                if term and (term not in j.job_id.lower() and term not in (j.filename or '').lower()):
+                try:
+                    # Normalize nullable columns so legacy rows (e.g. from an
+                    # older schema where `status` could be NULL) don't blow
+                    # up the whole list with an AttributeError on .lower().
+                    job_status = (j.status or 'Pending')
+                    job_status_lower = job_status.lower()
+                    job_id_lower = (j.job_id or '').lower()
+                    filename_lower = (j.filename or '').lower()
+
+                    if term and (term not in job_id_lower and term not in filename_lower):
+                        continue
+
+                    if not is_job_in_date_range(j, date_filter):
+                        continue
+
+                    if status_filter != 'All':
+                        if status_filter == 'Pending' and job_status not in ['In Queue', 'Pending', 'Processing', 'Printing Started']:
+                            continue
+                        if status_filter == 'Printing' and job_status not in ['Printing', 'Printing Started']:
+                            continue
+                        if status_filter == 'Completed' and job_status_lower != 'completed':
+                            continue
+                        if status_filter == 'Failed' and job_status_lower != 'failed':
+                            continue
+
+                    color = (j.color_mode or 'Color')
+                    side = ('Duplex' if (j.print_side or 'Single') in ['Duplex', 'Double'] else 'Single')
+                    type_text = f"{'B&W' if color.lower().startswith('black') else 'Color'} • {side}"
+                    filtered_jobs.append((j, type_text))
+                except Exception as row_err:
+                    logger.warning(
+                        "Skipping malformed job row job_id=%s: %s",
+                        getattr(j, 'job_id', '<unknown>'), row_err,
+                    )
                     continue
-                    
-                # Date filter
-                if not is_job_in_date_range(j, date_filter):
-                    continue
-                    
-                # Status filter
-                if status_filter != 'All':
-                    if status_filter == 'Pending' and j.status not in ['In Queue', 'Pending', 'Processing', 'Printing Started']:
-                        continue
-                    if status_filter == 'Printing' and j.status not in ['Printing', 'Printing Started']:
-                        continue
-                    if status_filter == 'Completed' and j.status.lower() != 'completed':
-                        continue
-                    if status_filter == 'Failed' and j.status.lower() != 'failed':
-                        continue
-                        
-                # Print type filter (derive text)
-                color = (j.color_mode or 'Color')
-                side = ('Duplex' if (j.print_side or 'Single') in ['Duplex', 'Double'] else 'Single')
-                type_text = f"{'B&W' if color.lower().startswith('black') else 'Color'} • {side}"
-                filtered_jobs.append((j, type_text))
             
             logger.info(f"Total jobs after filtering: {len(filtered_jobs)}")
 
@@ -8955,13 +9001,23 @@ class DashboardWindow(QMainWindow):
             if hasattr(self, 'jobs_header_card'):
                 self.jobs_header_card.setVisible(len(filtered_jobs) > 0)
             
-            # Create cards for each job
+            # Create cards for each job — isolate failures so one bad row
+            # (e.g. corrupt datetime, missing column post-migration) does not
+            # abort the whole refresh and surface an "Error loading print
+            # jobs" toast on every poll.
             for row, pair in enumerate(filtered_jobs):
                 job, type_text = pair
-                card = self.create_print_job_card(job, type_text, row)
-                self.job_cards_map[job.job_id] = {'card': card, 'job': job}
-                if hasattr(self, 'jobs_cards_layout'):
-                    self.jobs_cards_layout.addWidget(card)
+                try:
+                    card = self.create_print_job_card(job, type_text, row)
+                    self.job_cards_map[job.job_id] = {'card': card, 'job': job}
+                    if hasattr(self, 'jobs_cards_layout'):
+                        self.jobs_cards_layout.addWidget(card)
+                except Exception as card_err:
+                    logger.warning(
+                        "Failed to render job card job_id=%s: %s",
+                        getattr(job, 'job_id', '<unknown>'), card_err,
+                    )
+                    continue
             
             # Add stretch to push cards to top
             if hasattr(self, 'jobs_cards_layout'):
@@ -9140,15 +9196,25 @@ class DashboardWindow(QMainWindow):
                 QTimer.singleShot(0, lambda: self._safe_restore_jobs_scroll(scroll_pos))
             
         except Exception as e:
-            logger.error(f"Error loading print jobs: {e}")
-            # Show error in status if available
+            # Log the full traceback so recurring "Error loading print jobs"
+            # toasts can actually be diagnosed. Also suppress the toast once
+            # per error class to avoid spamming the user every 5s.
+            logger.error("Error loading print jobs: %s", e, exc_info=True)
             if hasattr(self, "connection_status_label"):
                 self.connection_status_label.setText("Error loading data")
-            # Friendly message instead of blocking error
-            self.show_toast("Error loading print jobs, retrying...")
-            # Ensure polling continues even if there's an error
+
+            err_signature = f"{type(e).__name__}:{str(e)[:80]}"
+            last_sig = getattr(self, '_last_load_jobs_error_sig', None)
+            if err_signature != last_sig:
+                self.show_toast("Error loading print jobs, retrying...")
+                self._last_load_jobs_error_sig = err_signature
+
             if hasattr(self, 'poll_timer') and not self.poll_timer.isActive():
                 self.poll_timer.start(5000)
+        else:
+            # Successful refresh — clear the last error signature so a future
+            # failure will toast exactly once again.
+            self._last_load_jobs_error_sig = None
         finally:
             self._is_refreshing_jobs = False
     

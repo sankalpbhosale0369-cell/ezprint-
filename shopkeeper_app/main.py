@@ -650,9 +650,17 @@ def main():
     # Initialize error handling
     initialize_error_handling()
 
-    # The FastAPI backend owns all persistence now; the desktop app no longer
-    # bootstraps a local SQLAlchemy schema. Any legacy `shared.database`
-    # imports that remain are deprecated and will be removed in a follow-up.
+    # The FastAPI backend owns all persistence now, but a few client paths
+    # (notably `printer_manager` activation / heartbeat bookkeeping) still
+    # read & write a local SQLite cache via `shared.database`. Ensure that
+    # schema exists before the UI boots so activation doesn't fail with
+    # "no such table: printers" on a fresh install. This whole block can be
+    # removed once the printer registry is fully migrated to the API.
+    try:
+        from shared.database import init_database
+        init_database()
+    except Exception as db_init_err:
+        logger.warning(f"Local schema bootstrap failed (non-fatal): {db_init_err}")
 
     import os
     import sys
