@@ -45,6 +45,19 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001
         pass
 
+    # Log the resolved boto3 public endpoint + any path prefix we will inject
+    # into presigned URLs, so a misconfigured single-host deploy (e.g. wrong
+    # `/s3` stripping behind Caddy) is easy to spot in `docker compose logs`.
+    try:
+        log.info(
+            "storage public endpoint: boto3_endpoint=%s url_prefix=%r (raw=%s)",
+            getattr(storage, "_public_endpoint", None),
+            getattr(storage, "_public_url_prefix", ""),
+            settings.s3_public_endpoint,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     # Fail fast if MinIO is unreachable / bucket missing in prod-style env.
     try:
         storage.ensure_bucket()

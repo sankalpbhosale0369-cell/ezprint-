@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Optional
+from urllib.parse import urlparse, urlunparse
 
 import boto3
 from botocore.client import Config
@@ -48,12 +49,38 @@ class TenantScopeViolation(RuntimeError):
     """Raised when code attempts to touch a key outside its tenant prefix."""
 
 
+def _split_public_endpoint(raw: str) -> tuple[str, str]:
+    """Split a configured public endpoint into a bare ``scheme://host`` part
+    and an optional path prefix.
+
+    This exists because some single-host deploys expose MinIO under a path
+    prefix on the same Caddy (e.g. ``https://host.example/s3``), and that
+    proxy then strips the prefix before forwarding to MinIO. SigV4 signs the
+    CanonicalURI as-issued, so we MUST build the boto3 client against the
+    bare host (``https://host.example``) to match what MinIO actually sees
+    after stripping. The prefix is re-injected into the returned URL, in a
+    way that does not change the signature.
+    """
+    if not raw:
+        return raw, ""
+    p = urlparse(raw)
+    scheme = p.scheme or "http"
+    netloc = p.netloc or p.path  # tolerate values missing scheme
+    if not p.netloc:
+        # urlparse puts "host:port" into .path when scheme is absent
+        return raw, ""
+    prefix = (p.path or "").rstrip("/")
+    bare = f"{scheme}://{netloc}"
+    return bare, prefix
+
+
 class StorageService:
     """Thin wrapper around boto3 with per-tenant enforcement."""
 
     def __init__(self) -> None:
         self._internal_endpoint = settings.s3_endpoint
-        self._public_endpoint = settings.s3_public_endpoint or settings.s3_endpoint
+        raw_public = settings.s3_public_endpoint or settings.s3_endpoint
+        self._public_endpoint, self._public_url_prefix = _split_public_endpoint(raw_public)
         self._bucket = settings.s3_bucket_name
         self._region = settings.s3_region
 
@@ -178,6 +205,21 @@ class StorageService:
             logger.warning("ensure_tenant_prefix failed for %s: %s", tenant_id, exc)
 
     # --------------------------------------------------------------- presigning
+    def _apply_public_prefix(self, signed_url: str) -> str:
+        """Inject the configured public URL prefix into a boto3-signed URL.
+
+        Does NOT change the query string, so the SigV4 signature remains
+        valid. The prefix is expected to be stripped back off by a proxy
+        (e.g. Caddy `handle_path /s3/*`) before the request reaches MinIO,
+        so MinIO recomputes the signature over the same CanonicalURI that
+        boto3 signed.
+        """
+        if not self._public_url_prefix:
+            return signed_url
+        p = urlparse(signed_url)
+        new_path = f"{self._public_url_prefix}{p.path}"
+        return urlunparse(p._replace(path=new_path))
+
     def presign_put(
         self,
         tenant_id: str,
@@ -192,6 +234,7 @@ class StorageService:
         url = self.public_client.generate_presigned_url(
             "put_object", Params=params, ExpiresIn=expires_in
         )
+        url = self._apply_public_prefix(url)
         return PresignedUpload(url=url, object_key=object_key, expires_in=expires_in)
 
     def presign_get(
@@ -206,9 +249,10 @@ class StorageService:
         if download_filename:
             safe = _sanitize_filename(download_filename)
             params["ResponseContentDisposition"] = f'attachment; filename="{safe}"'
-        return self.public_client.generate_presigned_url(
+        url = self.public_client.generate_presigned_url(
             "get_object", Params=params, ExpiresIn=expires_in
         )
+        return self._apply_public_prefix(url)
 
     # ----------------------------------------------------------------- object ops
     def head(self, tenant_id: str, object_key: str) -> dict:
