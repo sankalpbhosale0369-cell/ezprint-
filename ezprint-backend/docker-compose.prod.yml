@@ -1,0 +1,46 @@
+name: ezprint
+
+# Overlay file for production deploys on a single VM.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# - Removes direct host port bindings for Postgres/Redis/MinIO (everything
+#   goes through Caddy on 80/443).
+# - Adds Caddy with automatic TLS for API and the MinIO S3 endpoint
+#   (the latter is required so presigned URLs work from customer browsers).
+
+services:
+  postgres:
+    ports: []
+
+  redis:
+    ports: []
+
+  minio:
+    ports: []
+
+  api:
+    ports: []
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      minio:
+        condition: service_started
+    environment:
+      API_DOMAIN: ${API_DOMAIN}
+      S3_DOMAIN: ${S3_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+
+volumes:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EzPrint – Upload Document</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f1f5f9;color:#1e293b;min-height:100vh}
+.screen{display:none;min-height:100vh}
+.screen.active{display:flex;flex-direction:column}
+
+/* ── Header ── */
+.header{background:#1A73E8;color:#fff;padding:18px 20px 16px;text-align:center}
+.header .logo{font-size:11px;letter-spacing:3px;text-transform:uppercase;opacity:.7;margin-bottom:4px}
+.header h1{font-size:22px;font-weight:700}
+.header .subtitle{font-size:13px;opacity:.8;margin-top:3px}
+
+/* ── Loading ── */
+#screen-loading{align-items:center;justify-content:center;gap:16px;background:#f1f5f9}
+.spinner{width:40px;height:40px;border:4px solid #e2e8f0;border-top-color:#1A73E8;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Error ── */
+#screen-error{align-items:center;justify-content:center;padding:40px 24px;text-align:center;gap:12px}
+.error-icon{font-size:48px}
+#screen-error h2{font-size:20px;color:#dc2626}
+#screen-error p{color:#64748b;max-width:300px;line-height:1.5}
+
+/* ── Upload form ── */
+#screen-upload{flex-direction:column}
+.form-body{flex:1;padding:20px;display:flex;flex-direction:column;gap:16px;max-width:520px;width:100%;margin:0 auto}
+
+/* Drop zone */
+.drop-zone{border:2px dashed #cbd5e1;border-radius:12px;padding:32px 20px;text-align:center;cursor:pointer;transition:all .2s;background:#fff;position:relative}
+.drop-zone:hover,.drop-zone.drag-over{border-color:#1A73E8;background:#eff6ff}
+.drop-zone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.drop-icon{font-size:36px;margin-bottom:10px}
+.drop-zone p{color:#64748b;font-size:14px;line-height:1.5}
+.drop-zone strong{color:#1A73E8}
+.drop-zone .formats{font-size:12px;color:#94a3b8;margin-top:6px}
+
+/* Selected file */
+.file-selected{display:flex;align-items:center;gap:12px;background:#eff6ff;border:2px solid #1A73E8;border-radius:12px;padding:14px 16px}
+.file-icon{font-size:28px;flex-shrink:0}
+.file-meta{flex:1;min-width:0}
+.file-meta .fname{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-meta .fsize{font-size:12px;color:#64748b;margin-top:2px}
+.file-remove{background:none;border:none;color:#94a3b8;cursor:pointer;font-size:18px;padding:4px;flex-shrink:0}
+.file-remove:hover{color:#dc2626}
+
+/* Card sections */
+.card{background:#fff;border-radius:12px;padding:18px;border:1px solid #e2e8f0}
+.card-title{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#64748b;margin-bottom:14px}
+
+/* Options grid */
+.options-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.field label{font-size:13px;font-weight:500;color:#374151;display:block;margin-bottom:5px}
+.field select,.field input[type=number],.field input[type=text],.field input[type=tel]{
+  width:100%;padding:9px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;
+  background:#fff;color:#1e293b;outline:none;transition:border-color .15s;-webkit-appearance:none
+}
+.field select:focus,.field input:focus{border-color:#1A73E8;box-shadow:0 0 0 3px #dbeafe}
+.field.full{grid-column:1/-1}
+
+/* Submit */
+.submit-btn{
+  background:#1A73E8;color:#fff;border:none;border-radius:12px;
+  padding:16px;font-size:16px;font-weight:700;cursor:pointer;
+  width:100%;transition:background .15s;margin-top:4px
+}
+.submit-btn:hover:not(:disabled){background:#1557b0}
+.submit-btn:disabled{background:#94a3b8;cursor:not-allowed}
+
+/* ── Progress ── */
+#screen-progress{align-items:center;justify-content:center;padding:40px 24px;text-align:center;gap:20px;background:#f1f5f9}
+.progress-track{width:100%;max-width:360px;height:8px;background:#e2e8f0;border-radius:99px;overflow:hidden}
+.progress-fill{height:100%;background:#1A73E8;border-radius:99px;transition:width .3s;width:0%}
+#progress-label{font-size:15px;font-weight:500;color:#374151}
+#progress-pct{font-size:13px;color:#64748b}
+
+/* ── Success ── */
+#screen-success{align-items:center;justify-content:center;padding:40px 24px;text-align:center;gap:0;background:#f1f5f9}
+.success-icon{font-size:64px;margin-bottom:16px}
+#screen-success h2{font-size:24px;font-weight:700;color:#16a34a;margin-bottom:8px}
+#screen-success .tagline{color:#64748b;font-size:15px;margin-bottom:24px}
+.summary-card{background:#fff;border-radius:12px;padding:20px;border:1px solid #e2e8f0;width:100%;max-width:360px;margin-bottom:24px;text-align:left}
+.summary-row{display:flex;justify-content:space-between;font-size:14px;padding:6px 0;border-bottom:1px solid #f1f5f9}
+.summary-row:last-child{border-bottom:none;font-weight:700;font-size:15px;padding-top:10px;margin-top:4px}
+.summary-row span:first-child{color:#64748b}
+.summary-row span:last-child{color:#1e293b}
+.amount-row span:last-child{color:#1A73E8;font-size:18px}
+.again-btn{background:#1A73E8;color:#fff;border:none;border-radius:12px;padding:14px 36px;font-size:15px;font-weight:600;cursor:pointer;transition:background .15s}
+.again-btn:hover{background:#1557b0}
+
+@media(max-width:400px){
+  .options-grid{grid-template-columns:1fr}
+  .field.full{grid-column:1}
+}
+</style>
+</head>
+<body>
+
+<!-- ────────── LOADING ────────── -->
+<div id="screen-loading" class="screen active">
+  <div class="spinner"></div>
+  <p style="color:#64748b;font-size:14px">Loading shop…</p>
+</div>
+
+<!-- ────────── ERROR ────────── -->
+<div id="screen-error" class="screen">
+  <div class="error-icon">⚠️</div>
+  <h2>Shop Not Found</h2>
+  <p id="error-msg">This link is invalid or the shop is not available.</p>
+</div>
+
+<!-- ────────── UPLOAD FORM ────────── -->
+<div id="screen-upload" class="screen">
+  <div class="header">
+    <div class="logo">EzPrint</div>
+    <h1 id="shop-name">Shop</h1>
+    <div class="subtitle" id="shop-subtitle">Upload a document to print</div>
+  </div>
+
+  <div class="form-body">
+
+    <!-- Drop zone (hidden once file selected) -->
+    <div id="drop-zone" class="drop-zone card">
+      <input type="file" id="file-input" accept=".pdf,.docx,.doc,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.bmp,.tiff">
+      <div class="drop-icon">📄</div>
+      <p>Drag &amp; drop your file here<br>or <strong>click to browse</strong></p>
+      <p class="formats">PDF, DOCX, DOC, PPT, PNG, JPG and more</p>
+    </div>
+
+    <!-- File selected info (hidden initially) -->
+    <div id="file-selected" class="file-selected" style="display:none">
+      <div class="file-icon" id="file-type-icon">📄</div>
+      <div class="file-meta">
+        <div class="fname" id="fname"></div>
+        <div class="fsize" id="fsize"></div>
+      </div>
+      <button class="file-remove" id="remove-file" title="Remove file">✕</button>
+    </div>
+
+    <!-- Print options (hidden until file picked) -->
+    <div id="options-section" class="card" style="display:none">
+      <div class="card-title">Print Options</div>
+      <div class="options-grid">
+        <div class="field">
+          <label for="copies">Copies</label>
+          <input type="number" id="copies" value="1" min="1" max="999">
+        </div>
+        <div class="field">
+          <label for="color-mode">Color</label>
+          <select id="color-mode">
+            <option value="Black & White">Black &amp; White</option>
+            <option value="Color">Color</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="print-side">Sides</label>
+          <select id="print-side">
+            <option value="Single">Single-sided</option>
+            <option value="Double">Double-sided</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="page-size">Paper Size</label>
+          <select id="page-size">
+            <option value="A4">A4</option>
+            <option value="A3">A3</option>
+            <option value="A5">A5</option>
+            <option value="Letter">Letter</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Customer details (hidden until file picked) -->
+    <div id="customer-section" class="card" style="display:none">
+      <div class="card-title">Your Details (Optional)</div>
+      <div class="options-grid">
+        <div class="field full">
+          <label for="customer-name">Name</label>
+          <input type="text" id="customer-name" placeholder="e.g. Ravi Kumar" autocomplete="name">
+        </div>
+        <div class="field full">
+          <label for="customer-phone">Phone</label>
+          <input type="tel" id="customer-phone" placeholder="e.g. 9876543210" autocomplete="tel">
+        </div>
+      </div>
+    </div>
+
+    <button id="submit-btn" class="submit-btn" disabled>Select a file to continue</button>
+  </div>
+</div>
+
+<!-- ────────── PROGRESS ────────── -->
+<div id="screen-progress" class="screen">
+  <div class="header" style="width:100%;text-align:center">
+    <div class="logo">EzPrint</div>
+    <h1 id="progress-shop-name">Uploading…</h1>
+  </div>
+  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:40px 24px;width:100%;max-width:400px;margin:0 auto">
+    <div class="spinner"></div>
+    <p id="progress-label">Preparing upload…</p>
+    <div class="progress-track" id="progress-track" style="display:none">
+      <div class="progress-fill" id="progress-fill"></div>
+    </div>
+    <p id="progress-pct" style="display:none"></p>
+  </div>
+</div>
+
+<!-- ────────── SUCCESS ────────── -->
+<div id="screen-success" class="screen">
+  <div class="header" style="width:100%;text-align:center">
+    <div class="logo">EzPrint</div>
+    <h1 id="success-shop-name">Order Placed</h1>
+  </div>
+  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;width:100%;max-width:420px;margin:0 auto">
+    <div class="success-icon">✅</div>
+    <h2>Order Submitted!</h2>
+    <p class="tagline">Your file has been sent to the shop.<br>It will be printed shortly.</p>
+    <div class="summary-card" id="summary-card"></div>
+    <button class="again-btn" onclick="location.reload()">Upload Another File</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ── State ──────────────────────────────────────────────────────────────
+  let uploadToken = null;
+  let shopName = '';
+  let selectedFile = null;
+
+  // ── Helpers ────────────────────────────────────────────────────────────
+  function show(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+  }
+
+  function fmtBytes(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+    return (b / 1048576).toFixed(1) + ' MB';
+  }
+
+  function fileIcon(name) {
+    const ext = name.split('.').pop().toLowerCase();
+    if (ext === 'pdf') return '📕';
+    if (['doc', 'docx'].includes(ext)) return '📘';
+    if (['ppt', 'pptx'].includes(ext)) return '📙';
+    if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff'].includes(ext)) return '🖼️';
+    return '📄';
+  }
+
+  function slug() {
+    return window.location.pathname.replace(/^\/+|\/+$/g, '').split('/').pop();
+  }
+
+  // ── Init: fetch upload token ───────────────────────────────────────────
+  async function init() {
+    const s = slug();
+    if (!s) { showError('No shop specified in URL.'); return; }
+    try {
+      const res = await fetch(`/api/v1/auth/upload/${encodeURIComponent(s)}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      uploadToken = data.upload_token;
+      shopName = data.shop_name;
+      document.getElementById('shop-name').textContent = shopName;
+      document.getElementById('progress-shop-name').textContent = shopName;
+      document.getElementById('success-shop-name').textContent = shopName;
+      show('screen-upload');
+    } catch (e) {
+      showError(e.message);
+    }
+  }
+
+  function showError(msg) {
+    document.getElementById('error-msg').textContent = msg;
+    show('screen-error');
+  }
+
+  // ── File selection ────────────────────────────────────────────────────
+  function onFileSelected(file) {
+    if (!file) return;
+    selectedFile = file;
+
+    document.getElementById('file-type-icon').textContent = fileIcon(file.name);
+    document.getElementById('fname').textContent = file.name;
+    document.getElementById('fsize').textContent = fmtBytes(file.size);
+
+    document.getElementById('drop-zone').style.display = 'none';
+    document.getElementById('file-selected').style.display = 'flex';
+    document.getElementById('options-section').style.display = 'block';
+    document.getElementById('customer-section').style.display = 'block';
+
+    const btn = document.getElementById('submit-btn');
+    btn.disabled = false;
+    btn.textContent = 'Upload & Print';
+  }
+
+  document.getElementById('file-input').addEventListener('change', function () {
+    if (this.files[0]) onFileSelected(this.files[0]);
+  });
+
+  document.getElementById('remove-file').addEventListener('click', function () {
+    selectedFile = null;
+    document.getElementById('file-input').value = '';
+    document.getElementById('file-selected').style.display = 'none';
+    document.getElementById('drop-zone').style.display = 'flex';
+    document.getElementById('options-section').style.display = 'none';
+    document.getElementById('customer-section').style.display = 'none';
+    const btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    btn.textContent = 'Select a file to continue';
+  });
+
+  // Drag and drop
+  const dz = document.getElementById('drop-zone');
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+  dz.addEventListener('drop', e => {
+    e.preventDefault(); dz.classList.remove('drag-over');
+    const f = e.dataTransfer.files[0];
+    if (f) { document.getElementById('file-input').files = e.dataTransfer.files; onFileSelected(f); }
+  });
+
+  // ── Upload flow ────────────────────────────────────────────────────────
+  document.getElementById('submit-btn').addEventListener('click', async function () {
+    if (!selectedFile || !uploadToken) return;
+
+    show('screen-progress');
+    setProgress(0, 'Creating job…');
+
+    const ext = selectedFile.name.split('.').pop().toLowerCase();
+
+    try {
+      // Step 1: Create job → presigned PUT URL
+      const createRes = await fetch(`/api/v1/jobs?t=${uploadToken}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: selectedFile.name,
+          file_type: ext,
+          file_size: selectedFile.size,
+          copies: parseInt(document.getElementById('copies').value) || 1,
+          page_size: document.getElementById('page-size').value,
+          orientation: 'Portrait',
+          print_side: document.getElementById('print-side').value,
+          color_mode: document.getElementById('color-mode').value,
+          layout_pages: 1,
+          layout_type: 'normal',
+          customer_name: document.getElementById('customer-name').value.trim() || null,
+          customer_phone: document.getElementById('customer-phone').value.trim() || null,
+        }),
+      });
+      if (!createRes.ok) {
+        const e = await createRes.json().catch(() => ({}));
+        throw new Error(e.detail || `Create job failed: HTTP ${createRes.status}`);
+      }
+      const { job_id, upload_url } = await createRes.json();
+
+      // Step 2: Upload file via FastAPI proxy (avoids CORS with MinIO)
+      setProgress(5, 'Uploading file…');
+      showProgressBar();
+      await uploadWithProgress(job_id, selectedFile);
+
+      // Step 3: Finalize
+      setProgress(95, 'Processing…');
+      hideProgressBar();
+      const finalRes = await fetch(`/api/v1/jobs/${job_id}/finalize?t=${uploadToken}`, {
+        method: 'POST',
+      });
+      if (!finalRes.ok) {
+        const e = await finalRes.json().catch(() => ({}));
+        throw new Error(e.detail || `Finalize failed: HTTP ${finalRes.status}`);
+      }
+      const finalData = await finalRes.json();
+      setProgress(100, 'Done!');
+
+      // Show success
+      showSuccess(finalData);
+
+    } catch (err) {
+      alert('Upload failed: ' + err.message + '\n\nPlease try again.');
+      show('screen-upload');
+    }
+  });
+
+  function setProgress(pct, label) {
+    document.getElementById('progress-label').textContent = label;
+    document.getElementById('progress-fill').style.width = pct + '%';
+    document.getElementById('progress-pct').textContent = pct + '%';
+  }
+
+  function showProgressBar() {
+    document.getElementById('progress-track').style.display = 'block';
+    document.getElementById('progress-pct').style.display = 'block';
+    // hide spinner
+    document.querySelector('#screen-progress .spinner').style.display = 'none';
+  }
+
+  function hideProgressBar() {
+    document.getElementById('progress-track').style.display = 'none';
+    document.getElementById('progress-pct').style.display = 'none';
+    document.querySelector('#screen-progress .spinner').style.display = 'block';
+  }
+
+  function uploadWithProgress(jobId, file) {
+    return new Promise((resolve, reject) => {
+      const formData = new FormData();
+      formData.append('file', file, file.name);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/v1/jobs/${jobId}/upload?t=${uploadToken}`);
+      xhr.upload.onprogress = function (e) {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 85) + 5;
+          setProgress(pct, 'Uploading… ' + fmtBytes(e.loaded) + ' / ' + fmtBytes(e.total));
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(`Upload failed: HTTP ${xhr.status} ${xhr.responseText.slice(0, 200)}`));
+      };
+      xhr.onerror = () => reject(new Error('Network error during file upload'));
+      xhr.send(formData);
+    });
+  }
+
+  function showSuccess(data) {
+    const copies = parseInt(document.getElementById('copies').value) || 1;
+    const colorMode = document.getElementById('color-mode').value;
+    const printSide = document.getElementById('print-side').value;
+
+    const rows = [
+      ['File', selectedFile.name.length > 28 ? selectedFile.name.slice(0, 25) + '…' : selectedFile.name],
+      ['Pages', data.total_pages != null ? data.total_pages : '—'],
+      ['Color pages', data.color_pages != null ? data.color_pages : '—'],
+      ['Copies', copies],
+      ['Mode', colorMode + ' · ' + printSide + '-sided'],
+      ['Amount Due', '₹ ' + (data.amount != null ? data.amount.toFixed(2) : '—')],
+    ];
+
+    const html = rows.map((r, i) =>
+      `<div class="summary-row${i === rows.length - 1 ? ' amount-row' : ''}">
+        <span>${r[0]}</span><span>${r[1]}</span>
+       </div>`
+    ).join('');
+
+    document.getElementById('summary-card').innerHTML = html;
+    show('screen-success');
+  }
+
+  // ── Boot ─────────────────────────────────────────────────────────────
+  init();
+})();
+</script>
+</body>
+</html>
