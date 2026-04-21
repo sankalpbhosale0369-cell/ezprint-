@@ -9,15 +9,26 @@ printing knobs, and a few legacy file-processing defaults.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-env_path = BASE_DIR / ".env"
-if env_path.exists():
-    load_dotenv(dotenv_path=env_path)
+# When running as a PyInstaller frozen exe, __file__ resolves inside the
+# temp extraction dir (_MEIPASS), not next to the .exe. Load .env from the
+# exe's directory first, then fall back to the repo root for dev.
+if getattr(sys, "frozen", False):
+    _exe_dir = Path(sys.executable).parent
+    _env_candidates = [_exe_dir / ".env", BASE_DIR / ".env"]
+else:
+    _env_candidates = [BASE_DIR / ".env"]
+
+for _env_path in _env_candidates:
+    if _env_path.exists():
+        load_dotenv(dotenv_path=_env_path)
+        break
 
 
 # ── Agent → ezprint-backend (FastAPI) ─────────────────────────────────────────

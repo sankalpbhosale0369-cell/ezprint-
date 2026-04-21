@@ -120,7 +120,12 @@ class ApiClient:
 
     # ------------------------------------------------------------- transport
     def _access_headers(self) -> Dict[str, str]:
-        h = {"Content-Type": "application/json", "Accept": "application/json"}
+        h = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            # Bypass ngrok browser-warning interstitial when tunnelling in dev.
+            "ngrok-skip-browser-warning": "true",
+        }
         if self.access_token:
             h["Authorization"] = f"Bearer {self.access_token}"
         return h
@@ -130,6 +135,7 @@ class ApiClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
             "Authorization": f"Bearer {self.agent_token}" if self.agent_token else "",
+            "ngrok-skip-browser-warning": "true",
         }
 
     def _access_needs_refresh(self) -> bool:
