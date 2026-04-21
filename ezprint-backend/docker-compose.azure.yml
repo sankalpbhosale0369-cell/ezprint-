@@ -1,0 +1,21 @@
+name: ezprint
+
+# Azure single-host overlay.
+# Usage (on the VM):
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.prod.yml \
+#     -f docker-compose.azure.yml \
+#     up -d --build
+#
+# Differences from the standard prod overlay:
+#   - Swaps Caddyfile for Caddyfile.azure which routes MinIO under /s3/* on
+#     the same hostname instead of requiring a separate S3_DOMAIN.
+#   - S3_DOMAIN env var is not needed and can be left blank in .env.
+
+services:
+  caddy:
+    volumes:
+      - ./Caddyfile.azure:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config

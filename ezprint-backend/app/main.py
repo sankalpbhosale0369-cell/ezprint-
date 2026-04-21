@@ -20,13 +20,37 @@ from app.ws.agent import ws_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging()
+    import logging
+    log = logging.getLogger(__name__)
+
+    # Guardrail: presigned GET/PUT URLs are signed against `s3_public_endpoint`.
+    # If the public base URL is a real host but the S3 public endpoint is
+    # still `localhost`, every download from a remote client will fail with
+    # "Max retries exceeded ... localhost:9000". Log a very loud warning so
+    # the operator notices in dev logs; we don't hard-fail because local
+    # developers legitimately run everything on localhost.
+    try:
+        pub = (settings.public_base_url or "").lower()
+        s3_pub = (settings.s3_public_endpoint or "").lower()
+        if ("localhost" in s3_pub or "127.0.0.1" in s3_pub) and \
+           ("localhost" not in pub and "127.0.0.1" not in pub):
+            log.error(
+                "MISCONFIGURATION: S3_PUBLIC_ENDPOINT=%s points to localhost but "
+                "PUBLIC_BASE_URL=%s is a public host. Remote agents/customers "
+                "will NOT be able to download files via presigned URLs. "
+                "Set S3_PUBLIC_ENDPOINT to a publicly reachable MinIO/S3 URL "
+                "(e.g. https://%s-s3 or the S3_DOMAIN you proxy through Caddy).",
+                settings.s3_public_endpoint, settings.public_base_url, settings.env,
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
     # Fail fast if MinIO is unreachable / bucket missing in prod-style env.
     try:
         storage.ensure_bucket()
     except Exception as exc:  # noqa: BLE001
         # Don't crash the API if storage is slow to come up during boot; log loudly.
-        import logging
-        logging.getLogger(__name__).warning("storage.ensure_bucket failed at boot: %s", exc)
+        log.warning("storage.ensure_bucket failed at boot: %s", exc)
     await notifier.start()
     try:
         yield

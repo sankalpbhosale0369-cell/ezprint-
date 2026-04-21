@@ -1,0 +1,28 @@
+{
+    email {$ACME_EMAIL}
+}
+
+{$API_DOMAIN} {
+    encode zstd gzip
+
+    @ws path /ws/*
+
+    # MinIO path-prefix routing.
+    # boto3 path-style presigned URL:  https://HOST/s3/{bucket}/{key}?X-Amz-...
+    # Caddy strips /s3 and forwards:   /bucket/key?X-Amz-...  →  minio:9000
+    handle_path /s3/* {
+        reverse_proxy minio:9000 {
+            header_up Host {host}
+        }
+    }
+
+    reverse_proxy @ws api:8000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+    }
+
+    reverse_proxy api:8000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+    }
+}

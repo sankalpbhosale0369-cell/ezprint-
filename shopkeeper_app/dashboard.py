@@ -2278,9 +2278,47 @@ class JobPopupDialog(QDialog):
             import threading
             def generate_preview():
                 try:
+                    import os
+                    import tempfile
                     from shared.file_processor import generate_final_print_pdf
                     from shared.file_processor import ensure_local_path
-                    local_path, is_temp = ensure_local_path(self.job.file_path)
+
+                    local_path = None
+
+                    # Preferred path: ask the backend for a fresh presigned
+                    # URL and stream the file locally. This avoids relying on
+                    # the `file_path` stored in the local SQLite cache, which
+                    # may be a long-expired or misconfigured URL (e.g. one
+                    # signed against `http://localhost:9000` when the backend
+                    # was deployed without a proper S3_PUBLIC_ENDPOINT).
+                    api_client = getattr(self.dashboard, 'api_client', None)
+                    job_id = getattr(self.job, 'job_id', None)
+                    if api_client is not None and job_id:
+                        try:
+                            safe_name = ''.join(
+                                c if c.isalnum() or c in ('.', '_', '-') else '_'
+                                for c in (self.job.filename or f"{job_id}.pdf").split('/')[-1]
+                            )
+                            temp_dir = os.path.join(tempfile.gettempdir(), 'ezprint_previews')
+                            os.makedirs(temp_dir, exist_ok=True)
+                            candidate = os.path.join(temp_dir, f"{job_id}_{safe_name}")
+                            ok, _path, err = api_client.download_job_file(job_id, candidate)
+                            if ok and os.path.exists(candidate):
+                                local_path = candidate
+                            else:
+                                logger.warning(
+                                    "Preview: fresh presigned download failed job=%s err=%s", job_id, err,
+                                )
+                        except Exception as dl_err:
+                            logger.warning(
+                                "Preview: presigned fetch raised, falling back to file_path: %s", dl_err,
+                            )
+
+                    # Fallback: the cached file_path (local file on this box,
+                    # or a direct URL from a legacy code path).
+                    if not local_path:
+                        local_path, _is_temp = ensure_local_path(self.job.file_path)
+
                     preview_pdf = generate_final_print_pdf(
                         file_path=local_path,
                         file_type=self.job.file_type or 'pdf',
