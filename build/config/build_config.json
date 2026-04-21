@@ -1,0 +1,98 @@
+{
+  "app_name": "EzPrint Agent",
+  "version": "1.0.0",
+  "channel": "stable",
+  "company_name": "EzPrint",
+  "copyright": "Copyright (c) 2024 EzPrint. All rights reserved.",
+
+  "build_settings": {
+    "compress_with_upx": true,
+    "create_installer": true,
+    "sign_executable": false,
+    "create_zip_package": true,
+    "include_source": false
+  },
+
+  "pyinstaller": {
+    "onefile": true,
+    "console": false,
+    "upx": true,
+    "strip_debug": true,
+    "bootloader_ignore_signals": false
+  },
+
+  "installer": {
+    "create_desktop_shortcut": true,
+    "create_start_menu_shortcut": true,
+    "add_to_startup": false,
+    "require_admin": true,
+    "install_directory": "$PROGRAMFILES64\\EzPrint\\Agent"
+  },
+
+  "auto_update": {
+    "enabled": true,
+    "check_on_startup": true,
+    "check_interval_hours": 24,
+    "auto_install_critical": true,
+    "show_release_notes": true
+  },
+
+  "storage": {
+    "default_backend": "s3",
+    "fallback_enabled": true,
+    "fallback_order": ["s3", "local"]
+  },
+
+  "paths": {
+    "spec_file": "build/config/ezprint_agent.spec",
+    "version_info": "build/config/version_info.txt",
+    "installer_script": "build/config/installer.nsi",
+    "icon": "assets/icons/ezprint.ico",
+    "output_dir": "build/output",
+    "dist_dir": "build/output/dist",
+    "build_dir": "build/output/build",
+    "release_dir": "build/output/release"
+  },
+
+  "excludes": {
+    "modules": [
+      "matplotlib",
+      "numpy",
+      "pandas",
+      "scipy",
+      "jupyter",
+      "notebook",
+      "IPython"
+    ],
+    "packages": []
+  },
+
+  "code_signing": {
+    "enabled": false,
+    "certificate_path": "",
+    "timestamp_server": "http://timestamp.digicert.com",
+    "digest_algorithm": "SHA256"
+  },
+
+  "release": {
+    "generate_checksums": true,
+    "checksum_algorithm": "sha256",
+    "include_readme": true,
+    "include_release_notes": true,
+    "zip_compression": "deflate",
+    "zip_compression_level": 9
+  },
+
+  "logging": {
+    "build_log": "build/output/build.log",
+    "verbose": true,
+    "colored_output": true
+  },
+
+  "ci_cd": {
+    "enabled": false,
+    "platform": "github_actions",
+    "trigger_on_tag": true,
+    "upload_artifacts": true
+  }
+}

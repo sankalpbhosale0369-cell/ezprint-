@@ -1,0 +1,66 @@
+EzPrint Agent - End User License Agreement (EULA)
+====================================================
+
+Copyright (c) 2024 EzPrint. All rights reserved.
+
+This End User License Agreement ("Agreement") is a legal agreement between you
+(either an individual or a single entity) and EzPrint for the EzPrint Agent
+software product, which includes computer software and may include associated
+media, printed materials, and online or electronic documentation ("Software").
+
+BY INSTALLING, COPYING, OR OTHERWISE USING THE SOFTWARE, YOU AGREE TO BE BOUND
+BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE TO THE TERMS OF THIS
+AGREEMENT, DO NOT INSTALL OR USE THE SOFTWARE.
+
+1. GRANT OF LICENSE
+EzPrint grants you a non-exclusive, non-transferable license to use the Software
+on a single computer or device, subject to the terms and conditions of this
+Agreement.
+
+2. RESTRICTIONS
+You may not:
+- Reverse engineer, decompile, or disassemble the Software
+- Rent, lease, or lend the Software
+- Remove any proprietary notices or labels on the Software
+- Use the Software for any illegal purpose
+
+3. SUBSCRIPTION TERMS
+The Software may require an active subscription to the EzPrint service. Continued
+use of the Software is subject to maintaining an active subscription.
+
+4. UPDATES AND MODIFICATIONS
+EzPrint may provide updates, modifications, or upgrades to the Software at its
+sole discretion. Such updates may be automatically downloaded and installed.
+
+5. TERM AND TERMINATION
+This Agreement is effective until terminated. Your rights under this Agreement
+will terminate automatically if you fail to comply with any of its terms.
+
+6. DISCLAIMER OF WARRANTY
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED
+OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+
+7. LIMITATION OF LIABILITY
+IN NO EVENT SHALL EZPRINT BE LIABLE FOR ANY SPECIAL, INCIDENTAL, INDIRECT, OR
+CONSEQUENTIAL DAMAGES WHATSOEVER ARISING OUT OF THE USE OF OR INABILITY TO USE
+THE SOFTWARE.
+
+8. PRIVACY
+Your use of the Software is also governed by EzPrint's Privacy Policy, available
+at https://ezprint.com/privacy
+
+9. GOVERNING LAW
+This Agreement shall be governed by and construed in accordance with the laws
+applicable in your jurisdiction.
+
+10. ENTIRE AGREEMENT
+This Agreement constitutes the entire agreement between you and EzPrint with
+respect to the Software and supersedes all prior or contemporaneous
+communications and proposals.
+
+For questions about this Agreement, please contact:
+Email: legal@ezprint.com
+Website: https://ezprint.com/legal
+
+Last Updated: April 2024

@@ -1,0 +1,51 @@
+# UTF-8
+#
+# Windows Version Information for EzPrint Agent
+# This file is used by PyInstaller to embed version info in the .exe
+#
+
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    # File version: MAJOR.MINOR.PATCH.BUILD
+    filevers=(1, 0, 0, 0),
+    # Product version: MAJOR.MINOR.PATCH.BUILD
+    prodvers=(1, 0, 0, 0),
+    # Contains a bitmask that specifies the valid bits in fileflags
+    mask=0x3f,
+    # Contains a bitmask that specifies the Boolean attributes of the file
+    flags=0x0,
+    # Operating system for which this file was designed
+    # VOS_NT_WINDOWS32 = 0x00040004
+    OS=0x40004,
+    # General type of file
+    # VFT_APP = 0x00000001 (Application)
+    fileType=0x1,
+    # Function of the file
+    # VFT2_UNKNOWN = 0x00000000
+    subtype=0x0,
+    # Creation date and time stamp
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          # Language: U.S. English (0x0409), Character set: Unicode (1200)
+          u'040904B0',
+          [
+            StringStruct(u'CompanyName', u'EzPrint'),
+            StringStruct(u'FileDescription', u'EzPrint Agent - Print Shop Management System'),
+            StringStruct(u'FileVersion', u'1.0.0.0'),
+            StringStruct(u'InternalName', u'EzPrintAgent'),
+            StringStruct(u'LegalCopyright', u'Copyright \xa9 2024 EzPrint. All rights reserved.'),
+            StringStruct(u'OriginalFilename', u'EzPrintAgent.exe'),
+            StringStruct(u'ProductName', u'EzPrint Agent'),
+            StringStruct(u'ProductVersion', u'1.0.0.0'),
+            StringStruct(u'Comments', u'Print shop management and printing agent for EzPrint SaaS platform')
+          ]
+        )
+      ]
+    ),
+    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
+  ]
+)
