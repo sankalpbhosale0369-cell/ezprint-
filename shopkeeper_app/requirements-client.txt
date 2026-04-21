@@ -1,0 +1,15 @@
+# Runtime dependencies for the Windows shopkeeper agent (.exe).
+# Backend-only packages (SQLAlchemy, boto3, cloudinary, flask-socketio,
+# eventlet, redis, etc.) intentionally omitted — the agent talks to
+# ezprint-backend over HTTPS + WebSocket and no longer runs a local DB.
+PyQt5>=5.15,<6
+requests>=2.31,<3
+websocket-client>=1.7,<2
+httpx>=0.27,<1
+PyPDF2>=3.0,<4
+pymupdf>=1.24,<2
+pillow>=10,<12
+qrcode>=7.4,<8
+bcrypt>=4.0,<5
+python-dotenv>=1.0,<2
+pywin32>=306 ; sys_platform == "win32"

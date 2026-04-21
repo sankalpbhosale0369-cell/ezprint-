@@ -49,7 +49,9 @@ from shared.global_error_handler import (
     global_error_handler, safe_execute, safe_ui_action, 
     safe_printer_action, safe_database_action, safe_thread_action
 )
-from shared.thread_safe_socketio_client import ThreadSafeSocketIOManager, SocketIOMessage
+# `shared.thread_safe_socketio_client` is no longer used; the WsClient above
+# owns the WebSocket connection. Kept removed to avoid pulling socketio/
+# engineio into the frozen build.
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +68,7 @@ TOGGLE_STYLE = """
         background-color: #e5e7eb;
     }
     QCheckBox::indicator:checked {
-        background-color: #3b82f6;
+        background-color: #1A73E8;
     }
     QCheckBox:disabled {
         opacity: 0.5;
@@ -236,14 +238,14 @@ class ChartJSGraph(QWidget):
                 datasets: [{{
                     label: '{y_axis_label}',
                     data: {values_json},
-                    borderColor: '#3b82f6',
+                    borderColor: '#1A73E8',
                     backgroundColor: 'transparent',
                     borderWidth: 2,
                     tension: 0.4,
                     pointRadius: 5,
                     pointHoverRadius: 7,
-                    pointBackgroundColor: '#3b82f6',
-                    pointBorderColor: '#3b82f6',
+                    pointBackgroundColor: '#1A73E8',
+                    pointBorderColor: '#1A73E8',
                     pointBorderWidth: 1,
                     fill: false,
                     capBezierPoints: true
@@ -563,10 +565,10 @@ def get_status_icon(status_type):
     painter.setRenderHint(QPainter.Antialiasing)
     
     color_map = {
-        'connected': QColor('#10b981'),  # Green
+        'connected': QColor('#34A853'),  # Green
         'disconnected': QColor('#ef4444'),  # Red
         'warning': QColor('#f59e0b'),  # Amber
-        'info': QColor('#3b82f6'),  # Blue
+        'info': QColor('#1A73E8'),  # Blue
     }
     
     color = color_map.get(status_type.lower(), QColor('#6b7280'))
@@ -922,7 +924,7 @@ class ConnectPrintersDialog(QDialog):
         status_layout.setSpacing(8)
         
         # Status indicator
-        status_color = "#10b981" if status == "Online" else "#ef4444"
+        status_color = "#34A853" if status == "Online" else "#ef4444"
         status_dot = QLabel("●")
         status_dot.setStyleSheet(f"color: {status_color}; font-size: 12px;")
         status_dot.setObjectName(f"status_dot_{printer_name}")  # For dynamic updates
@@ -1013,7 +1015,7 @@ class ConnectPrintersDialog(QDialog):
             disconnect_btn = QPushButton("Disconnect")
             disconnect_btn.setStyleSheet(button_style + """
                 QPushButton {
-                    background-color: #3b82f6;
+                    background-color: #1A73E8;
                     color: #ffffff;
                     border: 1px solid #2563eb;
                 }
@@ -1029,7 +1031,7 @@ class ConnectPrintersDialog(QDialog):
             connect_btn = QPushButton("Connect")
             connect_btn.setStyleSheet(button_style + """
                 QPushButton {
-                    background-color: #3b82f6;
+                    background-color: #1A73E8;
                     color: #ffffff;
                     border: 1px solid #2563eb;
                 }
@@ -1222,7 +1224,7 @@ class ConnectPrintersDialog(QDialog):
             # Update status labels if they exist
             if printer_name in self.status_labels:
                 status_labels = self.status_labels[printer_name]
-                status_color = "#10b981" if status == "Online" else "#ef4444"
+                status_color = "#34A853" if status == "Online" else "#ef4444"
                 
                 # Update status dot color
                 status_labels['dot'].setStyleSheet(f"color: {status_color}; font-size: 12px;")
@@ -1342,7 +1344,7 @@ class ConnectPrintersDialog(QDialog):
             toast = QLabel(message)
             toast.setStyleSheet("""
                 QLabel {
-                    background-color: #10b981;
+                    background-color: #34A853;
                     color: white;
                     padding: 8px 16px;
                     border-radius: 6px;
@@ -1524,60 +1526,58 @@ class DashboardKPIWorker(QThread):
     def run(self):
         try:
             logger.info(f"DashboardKPIWorker: Starting background data loading for shop {self.shop_id}")
-            
-            # API Client call logic
+
             api_success = False
             all_jobs_objs = []
             kpis = {}
-            
-            # Use top-level ApiClient
+
             api_client_local = ApiClient(session_token=self.session_token)
-            
-            success, api_data, error = api_client_local.get_dashboard(self.shop_id)
-            
-            if success and api_data:
-                logger.info("DashboardKPIWorker: Successfully fetched data from API")
-                kpis_raw = api_data.get('kpis', {})
-                jobs_list = api_data.get('jobs', [])
-                
-                # Map API KPIs to structured result
+
+            # Today KPIs drive the live cards; month KPIs drive the revenue totals.
+            today_ok, today_data, _today_err = api_client_local.get_dashboard(period="today", recent_limit=20)
+            month_ok, month_data, _month_err = api_client_local.get_dashboard(period="month", recent_limit=1)
+
+            if today_ok and today_data:
+                logger.info("DashboardKPIWorker: fetched /api/v1/dashboard (today + month)")
+                today_revenue = float(today_data.get("total_revenue", 0.0))
+                monthly_revenue = float((month_data or {}).get("total_revenue", 0.0)) if month_ok else 0.0
+
                 kpis = {
-                    'total': str(kpis_raw.get('total_jobs', 0)),
-                    'today': f"₹ {kpis_raw.get('total_revenue', 0.0):.2f}",
-                    'monthly': f"₹ {kpis_raw.get('total_revenue', 0.0):.2f}",
-                    'pending': str(kpis_raw.get('pending_jobs', 0)),
-                    'printing': str(kpis_raw.get('printing_jobs', 0)),
-                    'completed': str(kpis_raw.get('completed_jobs', 0)),
-                    'failed': str(kpis_raw.get('failed_jobs', 0))
+                    "total": str(today_data.get("total_jobs", 0)),
+                    "today": f"₹ {today_revenue:.2f}",
+                    "monthly": f"₹ {monthly_revenue:.2f}",
+                    "pending": str(today_data.get("awaiting_upload_jobs", 0) + today_data.get("in_progress_jobs", 0)),
+                    "printing": str(today_data.get("in_progress_jobs", 0)),
+                    "completed": str(today_data.get("completed_jobs", 0)),
+                    "failed": str(today_data.get("failed_jobs", 0)),
                 }
-                
-                # Convert API jobs to simple objects
+
                 from types import SimpleNamespace
-                for j in jobs_list:
+                for j in today_data.get("recent", []) or []:
                     created_at = None
-                    if j.get('created_at'):
+                    if j.get("created_at"):
                         try:
-                            # Parse ISO format (handling 'Z' or '+00:00')
-                            iso_str = j['created_at'].replace('Z', '+00:00')
-                            created_at = datetime.fromisoformat(iso_str)
-                        except:
+                            created_at = datetime.fromisoformat(j["created_at"].replace("Z", "+00:00"))
+                        except Exception:
                             pass
-                    
                     obj = SimpleNamespace(
-                        job_id=j.get('job_id'),
-                        filename=j.get('filename'),
-                        file_path=j.get('file_path'),
-                        status=j.get('status'),
-                        amount=j.get('amount', 0.0),
+                        job_id=j.get("job_id"),
+                        filename=j.get("filename"),
+                        file_path=None,  # presigned URL resolved lazily via /file-url
+                        status=j.get("status"),
+                        amount=j.get("amount", 0.0),
                         created_at=created_at,
-                        total_pages=j.get('total_pages'),
-                        copies=j.get('copies', 1),
-                        page_range=j.get('page_range'),
-                        page_size=j.get('page_size'),
-                        orientation=j.get('orientation'),
-                        print_side=j.get('print_side'),
-                        color_mode=j.get('color_mode'),
-                        layout_pages=j.get('layout_pages', 1)
+                        total_pages=j.get("total_pages"),
+                        color_pages=j.get("color_pages"),
+                        copies=j.get("copies", 1),
+                        page_range=None,
+                        page_size=None,
+                        orientation=None,
+                        print_side=j.get("print_side"),
+                        color_mode=j.get("color_mode"),
+                        layout_pages=1,
+                        customer_name=j.get("customer_name"),
+                        customer_phone=j.get("customer_phone"),
                     )
                     all_jobs_objs.append(obj)
                 api_success = True
@@ -1953,7 +1953,7 @@ class JobPopupDialog(QDialog):
             self.printer_label.setText(f"Printer: {p_display}")
             self.printer_label.setStyleSheet("""
                 font-weight: 700;
-                color: #334155;
+                color: #1a3d7a;
                 font-size: 14px;
             """)
         info_card_layout.addWidget(self.printer_label)
@@ -2048,7 +2048,7 @@ class JobPopupDialog(QDialog):
                 font-size: 9px;
                 font-weight: 500;
                 text-align: center;
-                background-color: #3b82f6;
+                background-color: #1A73E8;
                 color: #ffffff;
                 border: 1px solid #2563eb;
             }
@@ -2134,7 +2134,7 @@ class JobPopupDialog(QDialog):
                                 else:
                                     # Update printer label with successful route
                                     self.printer_label.setText(f"Printer: {selected or 'System Default'}")
-                                    self.printer_label.setStyleSheet("font-weight: 700; color: #334155; font-size: 14px;")
+                                    self.printer_label.setStyleSheet("font-weight: 700; color: #1a3d7a; font-size: 14px;")
                                     self.error_label.hide()
                             
                             # No routing error - proceed with auto-print
@@ -2206,7 +2206,7 @@ class JobPopupDialog(QDialog):
                 else:
                     # Success - update printer name
                     self.printer_label.setText(f"Printer: {selected or 'System Default'}")
-                    self.printer_label.setStyleSheet("font-weight: 700; color: #334155; font-size: 14px;")
+                    self.printer_label.setStyleSheet("font-weight: 700; color: #1a3d7a; font-size: 14px;")
                     self.error_label.hide()
                     
             except Exception as e:
@@ -2328,7 +2328,7 @@ class JobPopupDialog(QDialog):
                 QMenu { background-color: #ffffff; border: 1px solid #e5e7eb;
                     border-radius: 6px; padding: 4px; }
                 QMenu::item { color: #111827; padding: 8px 20px; font-size: 13px; }
-                QMenu::item:selected { background-color: #6366f1; color: #ffffff; border-radius: 4px; }
+                QMenu::item:selected { background-color: #1A73E8; color: #ffffff; border-radius: 4px; }
             """)
             preview_action = QAction("Preview (Final Print)", self)
             preview_action.triggered.connect(self.on_view_clicked)
@@ -2542,7 +2542,7 @@ class JobPopupDialog(QDialog):
                     font-size: 9px;
                     font-weight: 500;
                     text-align: center;
-                    background-color: #10b981;
+                    background-color: #34A853;
                     color: #ffffff;
                     border: 1px solid #059669;
                 }
@@ -2617,7 +2617,7 @@ class JobPopupDialog(QDialog):
                         font-size: 9px;
                         font-weight: 500;
                         text-align: center;
-                        background-color: #3b82f6;
+                        background-color: #1A73E8;
                         color: #ffffff;
                         border: 1px solid #2563eb;
                     }
@@ -2742,13 +2742,33 @@ class DashboardWindow(QMainWindow):
             logger.info("Setting up database session...")
             self.db = SessionLocal()
             
-            # Initialize API client with token from auth (if available)
-            token = self.shopkeeper_data.get('session_token')
+            # Initialize API client with full credentials from auth session.
+            # The shopkeeper_data dict carries access, refresh, and agent tokens
+            # plus the tenant_id/shop_id that scope every backend call.
+            token = self.shopkeeper_data.get('session_token') or self.shopkeeper_data.get('access_token')
+            refresh = self.shopkeeper_data.get('refresh_token')
+            agent = self.shopkeeper_data.get('agent_token')
+            tenant_id = self.shopkeeper_data.get('tenant_id')
+
             self.api_client = ApiClient(session_token=token)
+            if refresh:
+                self.api_client.refresh_token_value = refresh
+            if agent:
+                self.api_client.set_agent_token(agent)
+            if tenant_id:
+                self.api_client.tenant_id = tenant_id
+            self.api_client.shop_id = self.shopkeeper_data.get('shop_id')
+            self.api_client.shop_name = self.shopkeeper_data.get('shop_name')
+            self.api_client.username = self.shopkeeper_data.get('username')
+
+            # Keep AuthManager's client in sync
             if token:
                 self.auth_manager.api_client.set_session_token(token)
-            logger.info(f"ApiClient initialized with token: {'Available' if token else 'Not Available'}")
-            
+            logger.info(
+                "ApiClient initialized: token=%s tenant=%s agent=%s",
+                'yes' if token else 'no', tenant_id or 'none', 'yes' if agent else 'no',
+            )
+
             # Phase 5: Ensure token is stored for WS setup
             self.session_token = token
             
@@ -2889,23 +2909,16 @@ class DashboardWindow(QMainWindow):
             logger.error(f"Startup job recovery failed: {e}")
 
     def bulk_delete_jobs(self, job_ids):
-        """Delete multiple jobs safely, cleaning up Cloudinary assets as needed."""
+        """Legacy bulk-delete. Asset cleanup is now owned by the backend's
+        job state machine (see ezprint-backend/app/workers/cleanup.py); the
+        agent only clears local rows so the dashboard doesn't drift."""
         def delete_operation():
-            from shared.cloudinary_helper import delete_file_from_cloudinary
             deleted_count = 0
             for job_id in job_ids:
                 job = self.db.query(PrintJob).filter_by(job_id=job_id).first()
                 if job:
-                    # Remove from Cloudinary if an asset is linked
-                    if job.cloudinary_public_id:
-                        try:
-                            delete_file_from_cloudinary(job.cloudinary_public_id)
-                        except Exception:
-                            pass  # Non-fatal: continue deletion even if cloud cleanup fails
-
                     self.db.delete(job)
                     deleted_count += 1
-
             return deleted_count
 
         count = self.safe_db_operation(delete_operation)
@@ -3170,7 +3183,7 @@ class DashboardWindow(QMainWindow):
             key = synonyms.get(s, s)
             # Prefer explicit variants for display text
             if key == 'printing completed':
-                return 'Printing Completed', 'background:#10b981; color:#fff; font-weight: 600;'
+                return 'Printing Completed', 'background:#34A853; color:#fff; font-weight: 600;'
             if key == 'printing started':
                 return 'Printing Started', 'background:#dbeafe; color:#1e40af; font-weight: 600;'
 
@@ -3178,7 +3191,7 @@ class DashboardWindow(QMainWindow):
                 'in queue': ('In Queue', 'background:#6b7280; color:#fff; font-weight: 600;'),  # Gray
                 'processing': ('Processing', 'background:#dbeafe; color:#1e40af; font-weight: 600;'),  # Light blue
                 'printing': ('Printing', 'background:#dbeafe; color:#1e40af; font-weight: 600;'),  # Light blue
-                'completed': ('Completed', 'background:#10b981; color:#fff; font-weight: 600;'),  # Green
+                'completed': ('Completed', 'background:#34A853; color:#fff; font-weight: 600;'),  # Green
                 'failed': ('Failed', 'background:#ef4444; color:#fff; font-weight: 600;'),  # Red
                 'cancelled': ('Cancelled', 'background:#f3f4f6; color:#374151; font-weight: 600;'),
                 'pending': ('Pending', 'background:#93c5fd; color:#111827; font-weight: 600;'),
@@ -3433,6 +3446,15 @@ class DashboardWindow(QMainWindow):
     def update_job_status_in_ui(self, job_id, new_status, progress=None, details=None):
         """Update a single job's status in the UI (both table and cards) without full reload"""
         try:
+            # 0. Sync local SQLite cache so next load_print_jobs() is consistent
+            try:
+                local_job = self.db.query(PrintJob).filter(PrintJob.job_id == job_id).first()
+                if local_job and local_job.status != new_status:
+                    local_job.status = new_status
+                    self.db.commit()
+            except Exception:
+                self.db.rollback()
+
             # 1. Update Modern Card UI (if it exists)
             if hasattr(self, 'job_cards_map') and job_id in self.job_cards_map:
                 card = self.job_cards_map[job_id]['card']
@@ -3586,7 +3608,7 @@ class DashboardWindow(QMainWindow):
         self.sidebar.setMaximumWidth(300)  # Maximum width constraint
         self.sidebar.setStyleSheet("""
             QFrame { 
-                background-color: #1e293b; 
+                background-color: #0d2a5e; 
                 border: none;
             }
             QPushButton { 
@@ -3601,12 +3623,12 @@ class DashboardWindow(QMainWindow):
                 spacing: 12px;
             }
             QPushButton:hover { 
-                background-color: #334155; 
+                background-color: #1a3d7a; 
                 color: #ffffff;
                 font-size: 14pt;
             }
             QPushButton:checked { 
-                background-color: #3b82f6; 
+                background-color: #1A73E8; 
                 color: #ffffff; 
                 font-size: 14pt;
                 font-weight: 600;
@@ -3630,7 +3652,7 @@ class DashboardWindow(QMainWindow):
         layout.setSpacing(6)
 
         # Logo image at the top of the sidebar (replaces brand container)
-        logo_path = r"C:\Users\Asus\Desktop\success_MVP_7\Screenshot 2025-12-19 094645.png"
+        logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "images", "logo.png")
         
         logo_label = QLabel()
         if os.path.exists(logo_path):
@@ -3693,7 +3715,7 @@ class DashboardWindow(QMainWindow):
             if checked:
                 profile_container.setStyleSheet("""
                     QWidget {
-                        background-color: #3b82f6;
+                        background-color: #1A73E8;
                         border-radius: 8px;
                         border: none;
                     }
@@ -3710,7 +3732,7 @@ class DashboardWindow(QMainWindow):
                         border: none;
                     }
                     QWidget:hover {
-                        background-color: #334155;
+                        background-color: #1a3d7a;
                         border-radius: 8px;
                         border: none;
                     }
@@ -4981,7 +5003,7 @@ class DashboardWindow(QMainWindow):
         download_btn = QPushButton("Download QR")
         download_btn.setStyleSheet("""
             QPushButton {
-                background-color: #3b82f6;
+                background-color: #1A73E8;
                 color: #ffffff;
                 border: none;
                 padding: 10px 20px;
@@ -4998,7 +5020,7 @@ class DashboardWindow(QMainWindow):
         print_btn = QPushButton("Print QR")
         print_btn.setStyleSheet("""
             QPushButton {
-                background-color: #10b981;
+                background-color: #34A853;
                 color: #ffffff;
                 border: none;
                 padding: 10px 20px;
@@ -5157,13 +5179,13 @@ class DashboardWindow(QMainWindow):
         buttons_layout.setSpacing(10)
         download_btn = QPushButton("Download QR")
         download_btn.setStyleSheet("""
-            QPushButton { background-color:#3b82f6; color:#fff; border:none; padding:10px 20px; border-radius:6px; font-weight:600; font-size:13px; }
+            QPushButton { background-color:#1A73E8; color:#fff; border:none; padding:10px 20px; border-radius:6px; font-weight:600; font-size:13px; }
             QPushButton:hover { background-color:#2563eb; }
         """)
         download_btn.clicked.connect(self.download_qr_code)
         print_btn = QPushButton("Print QR")
         print_btn.setStyleSheet("""
-            QPushButton { background-color:#10b981; color:#fff; border:none; padding:10px 20px; border-radius:6px; font-weight:600; font-size:13px; }
+            QPushButton { background-color:#34A853; color:#fff; border:none; padding:10px 20px; border-radius:6px; font-weight:600; font-size:13px; }
             QPushButton:hover { background-color:#059669; }
         """)
         print_btn.clicked.connect(self.print_qr_code)
@@ -5267,7 +5289,7 @@ class DashboardWindow(QMainWindow):
                 background-color: #ffffff;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                border-color: #1A73E8;
             }
         """)
         shop_name_row.addWidget(self.edit_widgets['shop_name'])
@@ -5294,7 +5316,7 @@ class DashboardWindow(QMainWindow):
                 background-color: #ffffff;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                border-color: #1A73E8;
             }
         """)
         shopkeeper_row.addWidget(self.shopkeeper_name_input)
@@ -5318,7 +5340,7 @@ class DashboardWindow(QMainWindow):
                 background-color: #ffffff;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                border-color: #1A73E8;
             }
         """)
         address_row.addWidget(self.edit_widgets['shop_address'])
@@ -5342,7 +5364,7 @@ class DashboardWindow(QMainWindow):
                 background-color: #ffffff;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                border-color: #1A73E8;
             }
         """)
         contact_row.addWidget(self.edit_widgets['contact_number'])
@@ -5366,7 +5388,7 @@ class DashboardWindow(QMainWindow):
                 background-color: #ffffff;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                border-color: #1A73E8;
             }
         """)
         email_row.addWidget(self.email_input)
@@ -5379,7 +5401,7 @@ class DashboardWindow(QMainWindow):
         save_btn = QPushButton("Save")
         save_btn.setStyleSheet("""
             QPushButton {
-                background-color: #3b82f6;
+                background-color: #1A73E8;
                 color: #ffffff;
                 border: none;
                 padding: 8px 16px;
@@ -5498,60 +5520,30 @@ class DashboardWindow(QMainWindow):
             logger.error(f"Error syncing pricing UI: {e}")
 
     def load_pricing(self):
-        """Load pricing and shop configuration from API (with DB fallback)"""
+        """Load pricing + shop info from the FastAPI backend."""
         try:
-            shop_id = self.shopkeeper_data.get('shop_id')
-            if not shop_id:
-                logger.warning("No shop_id available for loading config")
-                return
-            
-            # Phase 3: Try to fetch config and pricing from API first
-            api_success = False
-            success, api_data, error = self.api_client.get_config(shop_id)
-            
-            if success and api_data:
-                logger.info("Shop configuration fetched successfully from API")
-                
-                # Update pricing from API
-                pricing_data = api_data.get('pricing', {})
-                if pricing_data:
-                    self.pricing_state["bw_single"] = pricing_data.get("bw_single", 2.0)
-                    self.pricing_state["bw_double"] = pricing_data.get("bw_double", 1.5)
-                    self.pricing_state["color_single"] = pricing_data.get("color_single", 10.0)
-                    self.pricing_state["color_double"] = pricing_data.get("color_double", 8.0)
-                
-                # Update shop info from API (Sync to self.shopkeeper_data)
-                shop_info = api_data.get('shop_info', {})
-                if shop_info:
-                    for key, val in shop_info.items():
-                        self.shopkeeper_data[key] = val
-                    logger.info("Shop info updated from API data")
-                
-                api_success = True
+            # Pricing
+            ok, pricing_data, err = self.api_client.get_pricing()
+            if ok and pricing_data:
+                self.pricing_state["bw_single"] = pricing_data.get("bw_single", 2.0)
+                self.pricing_state["bw_double"] = pricing_data.get("bw_double", 1.5)
+                self.pricing_state["color_single"] = pricing_data.get("color_single", 10.0)
+                self.pricing_state["color_double"] = pricing_data.get("color_double", 8.0)
             else:
-                logger.warning(f"API Config fetch failed, falling back to database: {error}")
-            
-            # Database Fallback
-            if not api_success:
-                logger.info("Using Database for Pricing/Config (Fallback)")
-                pricing = self.db.query(ShopPricing).filter(ShopPricing.shop_id == shop_id).first()
-                if pricing:
-                    self.pricing_state["bw_single"] = pricing.bw_single
-                    self.pricing_state["bw_double"] = pricing.bw_double
-                    self.pricing_state["color_single"] = pricing.color_single
-                    self.pricing_state["color_double"] = pricing.color_double
-                else:
-                    self.pricing_state.update({"bw_single": 2.0, "bw_double": 1.5, "color_single": 10.0, "color_double": 8.0})
-                    
-                # For shop info fallback, we rely on existing shopkeeper_data (from login)
-            
-            # Synchronize all UI widgets
+                logger.warning("load_pricing: pricing fetch failed (%s); keeping defaults", err)
+
+            # Shop info
+            ok_i, info, err_i = self.api_client.get_shop_info()
+            if ok_i and info:
+                for key, val in info.items():
+                    if val is not None:
+                        self.shopkeeper_data[key] = val
+            else:
+                logger.warning("load_pricing: shop-info fetch failed: %s", err_i)
+
             self._sync_pricing_ui()
-            
-            # If we are on profile page, refresh display
             if hasattr(self, 'current_page') and self.current_page == "profile":
                 self.setup_shop_info_display()
-                
         except Exception as e:
             logger.error(f"Error loading pricing: {e}")
             self._sync_pricing_ui()
@@ -5593,38 +5585,23 @@ class DashboardWindow(QMainWindow):
                 QMessageBox.warning(self, "Validation Error", "Prices must be positive numbers")
                 return
             
-            # Get or create pricing record
-            pricing = self.db.query(ShopPricing).filter(ShopPricing.shop_id == shop_id).first()
-            
-            if pricing:
-                # Update existing pricing
-                pricing.bw_single = bw_single
-                pricing.bw_double = bw_double
-                pricing.color_single = color_single
-                pricing.color_double = color_double
-                pricing.updated_at = datetime.utcnow()
-            else:
-                # Create new pricing record
-                pricing = ShopPricing(
-                    shop_id=shop_id,
-                    bw_single=bw_single,
-                    bw_double=bw_double,
-                    color_single=color_single,
-                    color_double=color_double
-                )
-                self.db.add(pricing)
-            
-            self.db.commit()
-            
-            # Update central state after successful save
-            self.pricing_state["bw_single"] = bw_single
-            self.pricing_state["bw_double"] = bw_double
-            self.pricing_state["color_single"] = color_single
-            self.pricing_state["color_double"] = color_double
+            ok, saved, err = self.api_client.update_pricing({
+                "bw_single": bw_single,
+                "bw_double": bw_double,
+                "color_single": color_single,
+                "color_double": color_double,
+            })
+            if not ok:
+                QMessageBox.warning(self, "Error", f"Could not save pricing: {err or 'unknown error'}")
+                return
 
-            # SYNC: Push saved values to BOTH sets of UI widgets immediately
+            self.pricing_state["bw_single"] = saved.get("bw_single", bw_single) if saved else bw_single
+            self.pricing_state["bw_double"] = saved.get("bw_double", bw_double) if saved else bw_double
+            self.pricing_state["color_single"] = saved.get("color_single", color_single) if saved else color_single
+            self.pricing_state["color_double"] = saved.get("color_double", color_double) if saved else color_double
+
             self._sync_pricing_ui()
-            
+
             QMessageBox.information(self, "Success", "Pricing configuration saved successfully")
             logger.info(f"Pricing saved for shop ID: {shop_id}")
             
@@ -5870,13 +5847,10 @@ class DashboardWindow(QMainWindow):
         self.btn_cancel_bulk.clicked.connect(self.bulk_cancel_jobs)
         sel_layout.addWidget(self.btn_cancel_bulk)
 
+        # Bulk-delete of Cloudinary assets is now owned by the backend state
+        # machine (see `app/services/jobs.py`); clients no longer own cleanup.
         self.btn_delete_bulk = QToolButton()
-        self.btn_delete_bulk.setToolTip("Delete")
-        self.btn_delete_bulk.setText("Delete")
-        self.btn_delete_bulk.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        self.btn_delete_bulk.setStyleSheet(btn_style)
-        self.btn_delete_bulk.clicked.connect(self.bulk_delete_jobs)
-        sel_layout.addWidget(self.btn_delete_bulk)
+        self.btn_delete_bulk.setVisible(False)
 
         self.btn_exit_select = QPushButton("Exit")
         self.btn_exit_select.setStyleSheet(btn_style)
@@ -6041,7 +6015,7 @@ class DashboardWindow(QMainWindow):
                 font-size: 13px;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                border-color: #1A73E8;
             }
             QLineEdit:read-only {
                 background-color: #f9fafb;
@@ -6076,7 +6050,7 @@ class DashboardWindow(QMainWindow):
                 font-size: 13px;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                border-color: #1A73E8;
             }
             QLineEdit:read-only {
                 background-color: #f9fafb;
@@ -6131,7 +6105,7 @@ class DashboardWindow(QMainWindow):
                 font-size: 13px;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                border-color: #1A73E8;
             }
             QLineEdit:read-only {
                 background-color: #f9fafb;
@@ -6166,7 +6140,7 @@ class DashboardWindow(QMainWindow):
                 font-size: 13px;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                border-color: #1A73E8;
             }
             QLineEdit:read-only {
                 background-color: #f9fafb;
@@ -6206,7 +6180,7 @@ class DashboardWindow(QMainWindow):
         save_btn = QPushButton("Save")
         save_btn.setStyleSheet("""
             QPushButton {
-                background-color: #3b82f6;
+                background-color: #1A73E8;
                 color: #ffffff;
                 border: none;
                 padding: 10px 20px;
@@ -6288,14 +6262,11 @@ class DashboardWindow(QMainWindow):
                 self.show_toast("Job not found")
                 return
 
-            # Cloudinary file — open in browser
-            if job.cloudinary_public_id:
+            remote_url = self._fetch_remote_job_url(getattr(job, 'job_id', None))
+            if remote_url:
                 import webbrowser
-                from shared.cloudinary_helper import get_cloudinary_url
-                url = get_cloudinary_url(job.cloudinary_public_id)
-                webbrowser.open(url)
+                webbrowser.open(remote_url)
 
-            # Local file fallback
             elif job.file_path and os.path.exists(job.file_path):
                 try:
                     if sys.platform.startswith('win'):
@@ -6392,16 +6363,33 @@ class DashboardWindow(QMainWindow):
         job = self.db.query(PrintJob).filter(PrintJob.job_id == job_id).first()
         if job: self.download_receipt(job)
 
+    def _fetch_remote_job_url(self, job_id):
+        """Ask the backend for a presigned download URL for this job.
+
+        Returns the URL string on success, or None if the backend is
+        unavailable, the asset has been cleaned up (410), or the job has
+        no id yet. Callers should fall back to the local `file_path`.
+        """
+        if not job_id:
+            return None
+        api_client = getattr(self, 'api_client', None)
+        if api_client is None:
+            return None
+        try:
+            ok, data, _err = api_client.get_job_file_url(job_id)
+        except Exception as exc:
+            logger.debug(f"get_job_file_url({job_id}) raised: {exc}")
+            return None
+        if ok and isinstance(data, dict):
+            return data.get('url') or data.get('download_url')
+        return None
+
     def _open_job_file(self, job):
         try:
-            if job and job.cloudinary_public_id:
+            remote_url = self._fetch_remote_job_url(getattr(job, 'job_id', None))
+            if remote_url:
                 import webbrowser
-                from shared.cloudinary_helper import get_cloudinary_url
-                url = get_cloudinary_url(job.cloudinary_public_id)
-                if url:
-                    webbrowser.open(url)
-                else:
-                    self.show_toast("Unable to generate file URL")
+                webbrowser.open(remote_url)
             elif job and job.file_path and os.path.exists(job.file_path):
                 if sys.platform.startswith('win'):
                     os.startfile(job.file_path)
@@ -6741,7 +6729,7 @@ class DashboardWindow(QMainWindow):
                 font-size: 13px;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                border-color: #1A73E8;
             }
             QLineEdit:read-only {
                 background-color: #f9fafb;
@@ -6778,7 +6766,7 @@ class DashboardWindow(QMainWindow):
                 font-size: 13px;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                border-color: #1A73E8;
             }
             QLineEdit:read-only {
                 background-color: #f9fafb;
@@ -6836,7 +6824,7 @@ class DashboardWindow(QMainWindow):
                 font-size: 13px;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                border-color: #1A73E8;
             }
             QLineEdit:read-only {
                 background-color: #f9fafb;
@@ -6873,7 +6861,7 @@ class DashboardWindow(QMainWindow):
                 font-size: 13px;
             }
             QLineEdit:focus {
-                border-color: #3b82f6;
+                border-color: #1A73E8;
             }
             QLineEdit:read-only {
                 background-color: #f9fafb;
@@ -6916,7 +6904,7 @@ class DashboardWindow(QMainWindow):
         save_settings_btn = QPushButton("Save")
         save_settings_btn.setStyleSheet("""
             QPushButton {
-                background-color: #3b82f6;
+                background-color: #1A73E8;
                 color: #ffffff;
                 border: none;
                 padding: 10px 20px;
@@ -7384,7 +7372,7 @@ class DashboardWindow(QMainWindow):
         status_layout.setSpacing(8)
         
         # Status indicator
-        status_color = "#10b981" if status == "Online" else "#ef4444"
+        status_color = "#34A853" if status == "Online" else "#ef4444"
         status_dot = QLabel("●")
         status_dot.setStyleSheet(f"color: {status_color}; font-size: 12px;")
         status_dot.setObjectName(f"status_dot_{printer_name}")
@@ -7464,7 +7452,7 @@ class DashboardWindow(QMainWindow):
             disconnect_btn = QPushButton("Disconnect")
             disconnect_btn.setStyleSheet("""
                 QPushButton {
-                    background-color: #3b82f6;
+                    background-color: #1A73E8;
                     color: #ffffff;
                     border: none;
                     padding: 10px 20px;
@@ -7484,7 +7472,7 @@ class DashboardWindow(QMainWindow):
             connect_btn = QPushButton("Connect")
             connect_btn.setStyleSheet("""
                 QPushButton {
-                    background-color: #3b82f6;
+                    background-color: #1A73E8;
                     color: #ffffff;
                     border: none;
                     padding: 10px 20px;
@@ -7601,7 +7589,7 @@ class DashboardWindow(QMainWindow):
                 font-family: 'Segoe UI', sans-serif;
             }
             QMenu::item:selected {
-                background-color: #3b82f6;
+                background-color: #1A73E8;
                 color: #ffffff;
                 border-radius: 4px;
             }
@@ -7753,7 +7741,7 @@ class DashboardWindow(QMainWindow):
             save_btn = QPushButton("Save")
             save_btn.setStyleSheet("""
                 QPushButton {
-                    background-color: #3b82f6;
+                    background-color: #1A73E8;
                     color: #ffffff;
                     border: none;
                     padding: 8px 20px;
@@ -7855,7 +7843,7 @@ class DashboardWindow(QMainWindow):
             # Update status labels
             if hasattr(self, 'connect_printers_status_labels') and printer_name in self.connect_printers_status_labels:
                 status_labels = self.connect_printers_status_labels[printer_name]
-                status_color = "#10b981" if status == "Online" else "#ef4444"
+                status_color = "#34A853" if status == "Online" else "#ef4444"
                 
                 if self._is_alive(status_labels['dot']):
                     status_labels['dot'].setStyleSheet(f"color: {status_color}; font-size: 12px;")
@@ -8258,33 +8246,49 @@ class DashboardWindow(QMainWindow):
         
         logger.info("Switched to Manual printing mode")
     
-    @safe_ui_action("SETUP_SOCKETIO")
+    @safe_ui_action("SETUP_WEBSOCKET")
     def setup_websocket(self):
-        """Setup SocketIO connection with fallback to polling - non-blocking"""
+        """Open the native `/ws/agent` connection to the new FastAPI backend.
+
+        Falls back to REST polling through ApiClient.list_jobs(...) if the
+        socket can't establish.
+        """
         try:
-            # Initialize thread-safe SocketIO manager
-            self.websocket_client = ThreadSafeSocketIOManager(
-                shop_id=self.shopkeeper_data['shop_id'],
-                server_url=EZPRINT_BASE_URL,
-                token=self.session_token
-            )
-            
-            # Start thread-safe SocketIO client
-            self.websocket_client.start(callback=self._on_websocket_message)
-            
-            # Set initial status
+            from shopkeeper_app.ws_client import WsClient
+
+            # Wire the shared ApiClient/WsClient down into the printer manager
+            # so presigned downloads + WS-first status reporting can work.
+            self.ws_client = WsClient(self.api_client)
+            self.websocket_client = self.ws_client  # legacy alias used elsewhere
+
+            def _translate_raw(message):
+                # Keep the historical `_on_websocket_message(kind, payload)` fan-out.
+                try:
+                    self._on_websocket_message(message.get("type"), message.get("data") or {})
+                except Exception:
+                    logger.exception("legacy ws handler failed")
+
+            # raw_event fires for ALL message types; the _translate_raw handler
+            # routes each type into _on_websocket_message. Do NOT also connect
+            # the per-type signals (new_job, job_status) — that would double-fire.
+            self.ws_client.raw_event.connect(_translate_raw)
+            self.ws_client.connected.connect(lambda _tid: self.thread_safe_signal.emit("ws_connected", None))
+            self.ws_client.disconnected.connect(lambda reason: self.thread_safe_signal.emit("ws_disconnected", reason))
+
+            if hasattr(self, "printer_manager") and self.printer_manager is not None:
+                self.printer_manager.attach_clients(api_client=self.api_client, ws_client=self.ws_client)
+
+            self.ws_client.start()
+
             if hasattr(self, "connection_status_label"):
                 self.connection_status_label.setText("Connecting...")
-            
-            # Start polling as fallback after a short delay
+
+            # Safety net: REST polling kicks in if the WS hasn't reported
+            # `registered` within 3s.
             QTimer.singleShot(3000, self.start_fallback_polling)
-            
-            # Setup periodic SocketIO reconnection attempts (if needed, but manager handles it)
-            # self.setup_websocket_reconnection()
-            
+
         except Exception as e:
             logger.error(f"WebSocket initialization failed: {e}")
-            # Ensure fallback polling starts immediately if WebSocket fails
             self.thread_safe_signal.emit("start_polling_fallback", None)
             if hasattr(self, "connection_status_label"):
                 self.connection_status_label.setText("Live updates unavailable, using polling")
@@ -8292,9 +8296,64 @@ class DashboardWindow(QMainWindow):
     def setup_polling_timer(self):
         """Setup fallback polling timer for when WebSocket is unavailable"""
         self.poll_timer = QTimer()
-        self.poll_timer.timeout.connect(self.load_print_jobs)
+        self.poll_timer.timeout.connect(self._poll_and_sync)
         self.poll_timer.setSingleShot(False)
         # Don't start immediately - only start when WebSocket fails
+
+    def _poll_and_sync(self):
+        """Fallback polling: sync recent jobs from backend API into local cache,
+        then refresh the UI. Runs on the main-thread timer."""
+        self._sync_jobs_from_api()
+        self.load_print_jobs()
+
+    def _sync_jobs_from_api(self):
+        """Fetch recent jobs from the backend REST API and upsert any that are
+        missing from the local SQLite cache.  Called by the poll timer when the
+        WebSocket is down so jobs are still discovered."""
+        if not hasattr(self, 'api_client') or self.api_client is None:
+            return
+        try:
+            ok, data, err = self.api_client.list_jobs(limit=20)
+            if not ok or not data:
+                return
+            jobs_list = data if isinstance(data, list) else data.get("jobs", [])
+            shop_id = self.shopkeeper_data.get('shop_id', '')
+            inserted = 0
+            for jd in jobs_list:
+                jid = jd.get("job_id")
+                if not jid:
+                    continue
+                existing = self.db.query(PrintJob).filter(PrintJob.job_id == jid).first()
+                if existing:
+                    continue
+                backend_status = (jd.get("status") or "Pending").strip()
+                local_status = "Pending" if backend_status == "Queued" else backend_status
+                pj = PrintJob(
+                    shop_id=shop_id,
+                    filename=jd.get("filename", "unknown"),
+                    file_path=jd.get("filename", ""),
+                    file_size=jd.get("file_size") or 0,
+                    file_type=jd.get("file_type", "pdf"),
+                    job_id=jid,
+                    copies=jd.get("copies", 1),
+                    page_size=jd.get("page_size", "A4"),
+                    orientation=jd.get("orientation", "Portrait"),
+                    print_side=jd.get("print_side", "Single"),
+                    color_mode=jd.get("color_mode", "Black & White"),
+                    layout_pages=jd.get("layout_pages", 1),
+                    layout_type=jd.get("layout_type", "normal"),
+                    total_pages=jd.get("total_pages"),
+                    amount=jd.get("amount"),
+                    status=local_status,
+                )
+                self.db.add(pj)
+                inserted += 1
+            if inserted:
+                self.db.commit()
+                logger.info(f"API poll: inserted {inserted} new job(s) into local cache")
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"_sync_jobs_from_api failed: {e}")
     
     def start_polling_fallback(self):
         """Start polling fallback from main thread"""
@@ -8317,16 +8376,14 @@ class DashboardWindow(QMainWindow):
         self.websocket_reconnect_timer.start(30000)  # Try every 30 seconds
     
     def attempt_websocket_reconnection(self):
-        """Attempt to reconnect SocketIO if it's not running (fallback check)"""
-        # Manager handles its own reconnection, but we check if the manager itself is alive
+        """Reconnect the `/ws/agent` WebSocket if the client isn't running."""
         if not self.websocket_client or not getattr(self.websocket_client, 'running', False):
-            logger.info("Re-initializing SocketIO manager...")
+            logger.info("Re-initializing WebSocket client...")
             self.setup_websocket()
     
     def start_fallback_polling(self):
-        """Start fallback polling if SocketIO is not connected"""
+        """Start REST polling fallback if the WebSocket isn't connected."""
         if hasattr(self, 'poll_timer') and not self.poll_timer.isActive():
-            # Check if SocketIO is connected
             if not self.websocket_client or not self.websocket_client.is_connected():
                 self.poll_timer.start(5000)
                 if hasattr(self, "connection_status_label"):
@@ -8429,7 +8486,7 @@ class DashboardWindow(QMainWindow):
             
             # Update UI elements if they exist (for other parts of the app)
             if hasattr(self, "connection_status_label"):
-                status_color = "#10b981" if has_connected_printer else "#ef4444"
+                status_color = "#34A853" if has_connected_printer else "#ef4444"
                 old_status_text = "Connected" if has_connected_printer else "Disconnected"
                 self.connection_status_label.setText(old_status_text)
                 self.connection_status_label.setStyleSheet(f"color: {status_color}; font-weight: 500; font-family: 'Segoe UI', sans-serif;")
@@ -8509,11 +8566,27 @@ class DashboardWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error in thread-safe operation {operation}: {e}")
     
-    def _on_websocket_message(self, message):
-        """Handle WebSocket/SocketIO messages from thread-safe client"""
+    def _on_websocket_message(self, kind, payload):
+        """Translate `/ws/agent` events into the legacy handler shape.
+
+        Signals from `WsClient` emit on background threads — we route the
+        translated message back to the UI thread via `thread_safe_signal`.
+        """
         try:
-            # Emit signal to process message in main thread
-            self.thread_safe_signal.emit("handle_websocket_message", message.data)
+            payload = payload or {}
+            if kind == "new_job":
+                translated = {"type": "new_print_job", "job": payload}
+            elif kind == "job_status":
+                translated = {
+                    "type": "job_update",
+                    "job_id": payload.get("job_id"),
+                    "status": payload.get("status"),
+                }
+            elif kind == "registered":
+                translated = {"type": "ws_status", "status": "connected"}
+            else:
+                return
+            self.thread_safe_signal.emit("handle_websocket_message", translated)
         except Exception as e:
             logger.error(f"Error processing WebSocket message: {e}")
     
@@ -8541,23 +8614,48 @@ class DashboardWindow(QMainWindow):
             return
 
         if message_type == 'new_print_job':
-            # Receive new job notification and refresh immediately
+            # Receive new job notification from backend via WebSocket.
+            # The job only exists on the backend — we must upsert it into
+            # the local SQLite cache so load_print_jobs() / popups pick it up.
             job_data = data.get('job', {})
             job_id = job_data.get('job_id', 'unknown')
-            job_status = job_data.get('status', 'Pending')
-            
-            # TRACE G: Dashboard received new_print_job
-            logger.info(f"TRACE G: Dashboard received new_print_job for job_id={job_id} status={job_status}")
-            logger.info(f"📥 Received new_print_job notification: job_id={job_id}, status={job_status}")
-            
-            # TRACE H: Dashboard refreshing job list after WebSocket
-            logger.info(f"TRACE H: Dashboard refreshing job list after WebSocket for job_id={job_id}")
-            
-            # Load print jobs in main thread to refresh the UI immediately
+            logger.info(f"Received new_print_job from backend: job_id={job_id}")
+
+            try:
+                # Check if already in local DB (e.g. from a polling race)
+                existing = self.db.query(PrintJob).filter(PrintJob.job_id == job_id).first()
+                if not existing:
+                    shop_id = self.shopkeeper_data.get('shop_id', '')
+                    pj = PrintJob(
+                        shop_id=shop_id,
+                        filename=job_data.get('filename', 'unknown'),
+                        file_path=job_data.get('download_url') or job_data.get('filename', ''),
+                        file_size=job_data.get('file_size') or 0,
+                        file_type=job_data.get('file_type', 'pdf'),
+                        job_id=job_id,
+                        copies=job_data.get('copies', 1),
+                        page_size=job_data.get('page_size', 'A4'),
+                        orientation=job_data.get('orientation', 'Portrait'),
+                        print_side=job_data.get('print_side', 'Single'),
+                        color_mode=job_data.get('color_mode', 'Black & White'),
+                        layout_pages=job_data.get('layout_pages', 1),
+                        layout_type=job_data.get('layout_type', 'normal'),
+                        total_pages=job_data.get('total_pages'),
+                        amount=job_data.get('amount'),
+                        status='Pending',
+                    )
+                    self.db.add(pj)
+                    self.db.commit()
+                    logger.info(f"Inserted backend job {job_id} into local cache")
+                else:
+                    logger.debug(f"Job {job_id} already in local cache, skipping insert")
+            except Exception as e:
+                self.db.rollback()
+                logger.error(f"Failed to upsert backend job {job_id} into local DB: {e}")
+
+            # Refresh the UI and trigger auto-print / popup
             self.load_print_jobs()
-            logger.info(f"✓ Refreshed job list after receiving new_print_job notification for job {job_id}")
-            
-            # If in auto mode, automatically print the new job
+
             if self.auto_mode:
                 self.check_and_print_pending_jobs()
                 
@@ -8964,7 +9062,7 @@ class DashboardWindow(QMainWindow):
                 btn_reprint.setStyleSheet(
                     """
                     QPushButton {
-                        background-color: #3b82f6;
+                        background-color: #1A73E8;
                         color: #ffffff;
                         border: none;
                         padding: 4px 14px;
@@ -9267,7 +9365,7 @@ class DashboardWindow(QMainWindow):
                 font-size: 9px;
                 font-weight: 500;
                 text-align: center;
-                background-color: #3b82f6;
+                background-color: #1A73E8;
                 color: #ffffff;
                 border: 1px solid #2563eb;
             }
@@ -9312,7 +9410,7 @@ class DashboardWindow(QMainWindow):
         
         # If this job was previously selected (e.g. during a refresh), restore style
         if job.job_id in self.selected_job_ids:
-            card.setStyleSheet("QFrame { background-color: #f0f9ff; border: 2px solid #3b82f6; border-radius: 8px; padding: 12px 20px; }")
+            card.setStyleSheet("QFrame { background-color: #f0f9ff; border: 2px solid #1A73E8; border-radius: 8px; padding: 12px 20px; }")
             
         return card
     
@@ -9597,7 +9695,7 @@ class DashboardWindow(QMainWindow):
                 # Visual feedback for card
                 if job_id in self.job_cards_map:
                     card = self.job_cards_map[job_id]['card']
-                    card.setStyleSheet("QFrame { background-color: #f0f9ff; border: 2px solid #3b82f6; border-radius: 8px; padding: 12px 20px; }")
+                    card.setStyleSheet("QFrame { background-color: #f0f9ff; border: 2px solid #1A73E8; border-radius: 8px; padding: 12px 20px; }")
             else:
                 self.selected_job_ids.discard(job_id)
                 # Reset visual feedback
@@ -9702,11 +9800,10 @@ class DashboardWindow(QMainWindow):
             
             file_path = getattr(job, 'file_path', None)
             
-            if job.cloudinary_public_id:
+            remote_url = self._fetch_remote_job_url(getattr(job, 'job_id', None))
+            if remote_url:
                 import webbrowser
-                from shared.cloudinary_helper import get_cloudinary_url
-                url = get_cloudinary_url(job.cloudinary_public_id)
-                webbrowser.open(url)
+                webbrowser.open(remote_url)
             elif file_path and os.path.exists(file_path):
                 try:
                     os.startfile(file_path)
@@ -9838,7 +9935,7 @@ class DashboardWindow(QMainWindow):
         
         # Fallback polling timer (disabled by default)
         self.poll_timer = QTimer()
-        self.poll_timer.timeout.connect(self.load_print_jobs)
+        self.poll_timer.timeout.connect(self._poll_and_sync)
         # If WS hasn't connected in 3s, start polling, then stop when connected
         try:
             # Start polling after 3 seconds if WebSocket not connected
@@ -9903,24 +10000,26 @@ class DashboardWindow(QMainWindow):
             pass
 
     def refresh_session_token(self):
-        """Automatically refresh the JWT session token"""
+        """Automatically refresh the JWT access + agent tokens."""
         try:
-            # Only refresh if we have a token
-            if not self.api_client.session_token:
+            if not self.api_client.access_token:
                 return
-                
+
             logger.debug("Attempting to refresh API session token")
-            success, data, error = self.api_client.refresh_token()
-            if success and data and 'session_token' in data:
-                new_token = data['session_token']
+            if self.api_client.refresh_access():
+                new_token = self.api_client.access_token
                 self.shopkeeper_data['session_token'] = new_token
-                # ApiClient.refresh_token() already calls set_session_token internally
-                # Sync with AuthManager's client as well
-                self.auth_manager.api_client.set_session_token(new_token)
-                self.session_token = new_token
-                logger.info("Session token refreshed successfully")
+                self.shopkeeper_data['access_token'] = new_token
+                if hasattr(self, 'session_token'):
+                    self.session_token = new_token
+                # Re-mint agent token so WS and file-url calls keep working
+                if self.api_client.mint_agent_token():
+                    self.shopkeeper_data['agent_token'] = self.api_client.agent_token
+                    logger.info("Session + agent tokens refreshed successfully")
+                else:
+                    logger.warning("Access token refreshed but agent mint failed")
             else:
-                logger.warning(f"Session token refresh failed: {error}")
+                logger.warning("Session token refresh failed")
         except Exception as e:
             logger.error(f"Error refreshing session token: {e}")
 
@@ -9947,24 +10046,34 @@ class DashboardWindow(QMainWindow):
             # Get printer_name from printer_manager tracking
             printer_name = getattr(self.printer_manager, 'job_printers', {}).get(job_id)
             
+            # Only push state-machine transitions to the backend.
+            # Intermediate local statuses (In Queue, Offline, Paper Out, etc.)
+            # are UI-only and would get a 409 from the backend.
+            normalized = (status or "").lower()
+            _BACKEND_STATUSES = {"printing", "printing started", "completed", "failed"}
             ws_success = False
-            if self.websocket_client and self.websocket_client.is_connected():
-                ws_success = self.websocket_client.report_job_status(
-                    job_id=job_id,
-                    status=status,
-                    progress=progress,
-                    details=details,
-                    printer_name=printer_name
-                )
+            if normalized in _BACKEND_STATUSES:
+                if self.websocket_client and self.websocket_client.is_connected():
+                    try:
+                        if normalized in ("printing", "printing started"):
+                            ws_success = self.websocket_client.report_print_started(job_id)
+                        elif normalized == "completed":
+                            ws_success = self.websocket_client.report_print_completed(job_id)
+                        elif normalized == "failed":
+                            ws_success = self.websocket_client.report_print_failed(job_id, details or None)
+                    except Exception:
+                        logger.exception("WS report_job_status failed job=%s status=%s", job_id, status)
+
+                # REST fallback via printer_manager when WS didn't send
+                if not ws_success and hasattr(self, 'printer_manager') and self.printer_manager.api_client:
+                    self.printer_manager.report_job_status(
+                        job_id, status,
+                        error_message=details if normalized == "failed" else None,
+                        printer_name=printer_name,
+                    )
             
-            # 2. DB write is NOT done here — this method runs on a background
-            # poller thread, and creating a separate SessionLocal() races with
-            # self.db writes on the main thread (on_job_completed / on_job_failed).
-            # Instead, we defer the DB write to update_job_status_in_ui() which
-            # runs on the main thread via thread_safe_signal, serializing all
-            # PrintJob row writes through self.db.
-            if not ws_success:
-                logger.info(f"WS disconnected for job {job_id} -> {status}; DB write deferred to main thread")
+            # DB write is deferred to update_job_status_in_ui() on the main thread
+            # via thread_safe_signal to avoid SQLite threading races.
             
             # 3. UI Update + DB write (deferred to main thread via signal)
             self.thread_safe_signal.emit("update_job_status", (job_id, status, progress, details))

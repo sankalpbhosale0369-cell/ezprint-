@@ -69,6 +69,9 @@ class PrinterManager:
         self.thread_safe_discovery = ThreadSafePrinterManager()
         self.thread_safe_discovery.start_discovery(interval=30)  # Discover every 30 seconds
         
+        # Track jobs where SumatraPDF reported success (for fast-printer detection)
+        self._sumatra_ok_jobs = set()
+
         # Initialize enhanced network printing
         self.enhanced_network_printing = EnhancedNetworkPrinting()
         
@@ -81,6 +84,19 @@ class PrinterManager:
         
         # Startup cleanup: remove stale temp files from previous sessions
         self._cleanup_stale_temp_files()
+
+        # New SaaS backend clients. Dashboard wires these in via
+        # `attach_clients(...)` after login so `_ensure_local_file` can fetch
+        # presigned MinIO URLs and `report_job_status` can prefer the WS.
+        self.api_client = None
+        self.ws_client = None
+
+    def attach_clients(self, api_client=None, ws_client=None):
+        """Wire the shared ApiClient + WsClient in from the dashboard."""
+        if api_client is not None:
+            self.api_client = api_client
+        if ws_client is not None:
+            self.ws_client = ws_client
     
     def _cleanup_stale_temp_files(self):
         """Remove leftover temp print files from previous sessions.
@@ -109,88 +125,153 @@ class PrinterManager:
         except Exception as e:
             logger.warning(f"Startup temp cleanup failed (non-fatal): {e}")
     
-    def _ensure_local_file(self, file_path):
+    def _ensure_local_file(self, file_path, job_id=None):
+        """Ensure a printable file is available on the local disk.
+
+        - If `file_path` is already a local Windows path, it is returned as-is.
+        - If it is an `http(s)://` URL (including presigned MinIO URLs that
+          ride on `job_status`/`new_job` payloads), it is streamed into the
+          per-session temp dir.
+        - If a `job_id` is supplied and `api_client` is attached, we always
+          resolve through the agent-token presigned URL (authoritative path
+          on the new backend).
         """
-        Ensure file is available locally for printing.
-        If file_path is a URL, download it to a temporary location.
-        If file_path is already local, return it as-is.
-        
-        Args:
-            file_path (str): Either a local file path or a URL
-        
-        Returns:
-            str: Local file path ready for printing
-        
-        Raises:
-            Exception: If download fails or file is not accessible
-        """
-        # Check if file_path is a URL
-        parsed = urlparse(file_path)
-        if parsed.scheme in ['http', 'https']:
-            # File is hosted in cloud, download it
-            logger.info(f"Downloading cloud file: {file_path}")
-            
+        # Preferred path on the new SaaS backend: resolve presigned URL by ID.
+        if job_id and self.api_client is not None:
+            temp_dir = os.path.join(tempfile.gettempdir(), 'ezprint_downloads')
+            os.makedirs(temp_dir, exist_ok=True)
+            safe_name = ''.join(c if c.isalnum() or c in ('.', '_', '-') else '_'
+                                for c in (file_path or f"{job_id}.pdf").split('/')[-1])
+            local_path = os.path.join(temp_dir, f"{job_id}_{safe_name}")
+            ok, _path, err = self.api_client.download_job_file(job_id, local_path)
+            if ok:
+                logger.info("downloaded job %s via presigned URL -> %s", job_id, local_path)
+                return local_path
+            logger.warning("presigned download failed job=%s err=%s", job_id, err)
+            # Fall through to direct URL if the caller also gave us one.
+
+        parsed = urlparse(file_path) if file_path else None
+        if parsed and parsed.scheme in ('http', 'https'):
             try:
-                # Create temp directory for downloads
                 temp_dir = os.path.join(tempfile.gettempdir(), 'ezprint_downloads')
                 os.makedirs(temp_dir, exist_ok=True)
-                
-                # Extract filename from URL or generate one
-                url_path = parsed.path
-                if '/' in url_path:
-                    filename = url_path.split('/')[-1]
-                else:
-                    filename = f"download_{int(time.time())}.pdf"
-                
-                # Download file (plain unauthenticated GET for public Cloudinary URLs)
-                local_path = os.path.join(temp_dir, filename)
-                response = requests.get(file_path, stream=True, timeout=30, headers={})
+                url_filename = parsed.path.split('/')[-1] or f"download_{int(time.time())}.pdf"
+                local_path = os.path.join(temp_dir, url_filename)
+
+                response = requests.get(file_path, stream=True, timeout=30)
                 response.raise_for_status()
-                
                 with open(local_path, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
-                
-                logger.info(f"Downloaded to: {local_path}")
+                logger.info("downloaded %s -> %s", file_path, local_path)
                 return local_path
-                
             except Exception as e:
-                logger.error(f"Failed to download cloud file: {e}")
-                raise Exception(f"Failed to download file from cloud: {str(e)}")
-        else:
-            # Check if it's a server-relative path like /uploads/<shop_id>/<file>
-            # These are saved by the local fallback on the Flask/Render backend
-            # and are NOT valid on the Windows client machine.
-            if file_path.startswith('/uploads/'):
-                BACKEND_BASE_URL = "https://ezprint-backend.onrender.com"
-                full_url = f"{BACKEND_BASE_URL}{file_path}"
-                logger.info(f"Detected server-relative path, converting to full URL: {full_url}")
-                
-                try:
-                    temp_dir = os.path.join(tempfile.gettempdir(), 'ezprint_downloads')
-                    os.makedirs(temp_dir, exist_ok=True)
-                    
-                    url_filename = file_path.split('/')[-1]
-                    local_path = os.path.join(temp_dir, url_filename)
-                    
-                    response = requests.get(full_url, stream=True, timeout=30)
-                    response.raise_for_status()
-                    
-                    with open(local_path, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            if chunk:
-                                f.write(chunk)
-                    
-                    logger.info(f"Downloaded server-relative file to: {local_path}")
-                    return local_path
-                    
-                except Exception as e:
-                    logger.error(f"Failed to download server-relative file: {e}")
-                    raise Exception(f"Failed to download file from server: {str(e)}")
-            
-            # True local Windows path (C:\...) — return as-is
-            return file_path
+                logger.error("download failed url=%s err=%s", file_path, e)
+                raise Exception(f"Failed to download file: {e}")
+
+        # Anything else must be a real local path on this Windows machine.
+        return file_path
+
+    # --------------------------------------------------------------- status
+    def report_job_status(self, job_id, status, *, error_message=None,
+                          printer_name=None, printed_pages=None):
+        """Publish a print job status update.
+
+        Strategy: prefer WebSocket (low-latency, already connected to the
+        backend) and fall back to the REST PATCH on its own transport when
+        the socket is flapping. Both paths are idempotent on the backend
+        thanks to the state machine, so dual-publishing a single transition
+        is safe.
+        """
+        normalized = (status or "").lower()
+        ws_sent = False
+        if self.ws_client is not None and self._ws_is_connected():
+            try:
+                if normalized == "printing":
+                    ws_sent = self.ws_client.report_print_started(job_id)
+                elif normalized == "completed":
+                    ws_sent = self.ws_client.report_print_completed(job_id)
+                elif normalized == "failed":
+                    ws_sent = self.ws_client.report_print_failed(job_id, error_message)
+            except Exception:
+                logger.exception("ws report failed job=%s status=%s", job_id, status)
+                ws_sent = False
+
+        if ws_sent:
+            return True, None
+
+        if self.api_client is not None:
+            target = {
+                "printing": "Printing",
+                "completed": "Completed",
+                "failed": "Failed",
+                "queued": "Queued",
+                "cancelled": "Cancelled",
+            }.get(normalized, status)
+            ok, _data, err = self.api_client.update_job_status(
+                job_id, target,
+                error_message=error_message,
+                printer_name=printer_name,
+                printed_pages=printed_pages,
+            )
+            return ok, err
+
+        return False, "No transport available"
+
+    # -------------------------------------------------- printers (SaaS API)
+    def _local_printer_names(self):
+        """Best-effort list of local printers for heartbeat / sync."""
+        try:
+            flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+            return [p[2] for p in win32print.EnumPrinters(flags)]
+        except Exception:
+            logger.exception("EnumPrinters failed")
+            return []
+
+    def _ws_is_connected(self):
+        ws = self.ws_client
+        if ws is None:
+            return False
+        flag = getattr(ws, 'is_connected', False)
+        try:
+            return bool(flag() if callable(flag) else flag)
+        except Exception:
+            return False
+
+    def send_printer_heartbeat(self):
+        """Push currently-visible printer names over the WebSocket."""
+        if self.ws_client is None or not self._ws_is_connected():
+            return False
+        names = self._local_printer_names()
+        payload = [{"printer_id": n, "is_online": True} for n in names]
+        return self.ws_client.send_printer_heartbeat(payload)
+
+    def sync_printers_with_server(self):
+        """Register any newly-detected local printer with the backend.
+
+        The server is now the source of truth for the tenant's printer list;
+        this keeps it in sync after discovery on the client.
+        """
+        if self.api_client is None:
+            return False, "Not authenticated"
+        ok, existing, err = self.api_client.list_printers()
+        if not ok:
+            return False, err
+        existing_ids = {p.get("printer_id") for p in (existing or []) if p}
+        pushed = 0
+        for name in self._local_printer_names():
+            if name in existing_ids:
+                continue
+            caps = self.printer_capabilities.get(name, {})
+            self.api_client.register_printer(
+                printer_id=name,
+                printer_name=name,
+                supports_color=bool(caps.get("is_color", False)),
+                supports_duplex=bool(caps.get("is_duplex", False)),
+            )
+            pushed += 1
+        return True, f"synced {pushed} new printer(s)"
     
     def _initialize_printer_capabilities(self):
         """
@@ -976,7 +1057,7 @@ class PrinterManager:
         _temp_final_pdf_path = None  # Track for cleanup
         original_file_path = file_path  # Remember original to detect downloads
         try:
-            file_path = self._ensure_local_file(file_path)
+            file_path = self._ensure_local_file(file_path, job_id=job_id)
             if file_path != original_file_path:
                 _temp_download_path = file_path  # Mark for cleanup after printing
         except Exception as e:
@@ -1482,6 +1563,10 @@ class PrinterManager:
             # Cleanup after all copies printed
             if job_id and hasattr(self, 'active_jobs') and job_id in self.active_jobs:
                 del self.active_jobs[job_id]
+
+            # Record success so the spooler poller can detect fast-printer completion
+            if job_id:
+                self._sumatra_ok_jobs.add(job_id)
 
             return True, "Document sent to printer"
             
@@ -2166,12 +2251,16 @@ class PrinterManager:
                 raise PrinterError(f"All network printing methods failed: {str(e2)}")
     
     def _print_to_network_printer_gdi_fallback(self, file_path, file_type, settings, job_id=None, printer_name=None):
-        """Fallback GDI printing method for network printers"""
+        """Fallback GDI printing method for network printers.
+
+        IMPORTANT: When called from print_document_with_settings via
+        _print_to_network_printer, `file_path` is already the processed
+        nup_path (page range / layout / color already applied). Do NOT
+        re-run generate_final_print_pdf — that would double-process.
+        """
         # Use provided printer_name or fallback to self.current_printer
         target_printer = printer_name or self.current_printer
         try:
-            # Prepare file according to layout (N-up) and color
-            layout_pages = int(settings.get('layout_pages') or 1)
             color_mode = settings.get('color_mode') or 'Color'
             page_size = settings.get('page_size') or 'A4'
             orientation = settings.get('orientation') or 'Portrait'
@@ -2179,28 +2268,15 @@ class PrinterManager:
             copies = int(settings.get('copies') or 1)
             print_side = settings.get('print_side') or 'Single'
 
-            try:
-                # CRITICAL FIX: Use generate_final_print_pdf() for preview-print matching
-                nup_path = generate_final_print_pdf(
-                    file_path, 
-                    file_type, 
-                    page_size=page_size, 
-                    orientation=orientation, 
-                    layout_pages=layout_pages, 
-                    color_mode=color_mode,
-                    page_range=page_range
-                )
-            except Exception as e:
-                error_msg = f"Failed to generate final print PDF: {str(e)}"
-                logger.error(error_msg)
-                raise PrinterError(error_msg)
+            # file_path is already the final print-ready PDF from the caller;
+            # skip generate_final_print_pdf to avoid double-processing.
 
             # Try SumatraPDF for PDFs first (works with network printers)
-            if nup_path.lower().endswith('.pdf'):
+            if file_path.lower().endswith('.pdf'):
                 sumatra = self._find_sumatra_pdf()
                 if sumatra and os.path.exists(sumatra):
                     try:
-                        ok, msg = self._print_with_sumatra(sumatra, nup_path, copies, page_range, orientation, print_side, color_mode, printer_name=target_printer)
+                        ok, msg = self._print_with_sumatra(sumatra, file_path, copies, page_range, orientation, print_side, color_mode, printer_name=target_printer)
                         if ok:
                             return True, msg
                     except Exception as e:
@@ -2208,13 +2284,13 @@ class PrinterManager:
 
             # Fallback: Use GDI printing (works with all Windows printers)
             try:
-                ok, msg = self._print_via_gdi_images(nup_path, file_type, copies, page_range, page_size, orientation, color_mode, print_side=print_side, job_id=job_id, printer_name=target_printer)
+                ok, msg = self._print_via_gdi_images(file_path, file_type, copies, page_range, page_size, orientation, color_mode, print_side=print_side, job_id=job_id, printer_name=target_printer)
                 return ok, msg
             except Exception as e:
                 error_msg = f"Network printer GDI printing failed: {str(e)}"
                 logger.error(error_msg)
                 raise PrinterError(error_msg)
-                
+
         except Exception as e:
             error_msg = f"Network printer GDI fallback failed: {str(e)}"
             logger.error(error_msg)

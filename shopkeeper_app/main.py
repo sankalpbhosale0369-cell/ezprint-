@@ -18,7 +18,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shopkeeper_app.auth import AuthManager
 from shopkeeper_app.dashboard import DashboardWindow
-from shared.database import init_database
 from shared.config import LOG_FILE
 from shared.global_error_handler import (
     global_error_handler, safe_execute, safe_ui_action, 
@@ -88,7 +87,7 @@ class ForgotPasswordDialog(QDialog):
         self.setFixedWidth(400)
         self.setStyleSheet("""
             QDialog { background-color: #f8fafc; }
-            QLabel { color: #1e293b; font-size: 14px; }
+            QLabel { color: #0d2a5e; font-size: 14px; }
             QLineEdit {
                 padding: 10px;
                 border: 1px solid #e2e8f0;
@@ -97,7 +96,7 @@ class ForgotPasswordDialog(QDialog):
                 background: white;
             }
             QPushButton {
-                background-color: #6366f1;
+                background-color: #1A73E8;
                 color: white;
                 padding: 10px;
                 border-radius: 8px;
@@ -105,7 +104,7 @@ class ForgotPasswordDialog(QDialog):
                 font-weight: bold;
                 border: none;
             }
-            QPushButton:hover { background-color: #4f46e5; }
+            QPushButton:hover { background-color: #114488; }
         """)
         
         self.stack = QStackedWidget()
@@ -286,7 +285,7 @@ class LoginWindow(QMainWindow):
         subtitle = QLabel("Without the Hassle")
         subtitle.setAlignment(Qt.AlignCenter)
         subtitle.setFont(QFont("Segoe UI", 18, QFont.Bold))
-        subtitle.setStyleSheet("color:#1976d2;")
+        subtitle.setStyleSheet("color:#1A73E8;")
         header.addWidget(subtitle)
 
         desc = QLabel("Easily manage and print documents with your connected printers.")
@@ -298,8 +297,8 @@ class LoginWindow(QMainWindow):
         cta_btn = QPushButton("Login as Shopkeeper")
         cta_btn.setCursor(Qt.PointingHandCursor)
         cta_btn.setStyleSheet("""
-            QPushButton { background:#1976d2; color:#ffffff; border:none; padding:10px 18px; border-radius:8px; font-weight:700; }
-            QPushButton:hover { background:#165fa8; }
+            QPushButton { background:#1A73E8; color:#ffffff; border:none; padding:10px 18px; border-radius:8px; font-weight:700; }
+            QPushButton:hover { background:#114488; }
         """)
         header.addWidget(cta_btn, alignment=Qt.AlignCenter)
 
@@ -351,7 +350,7 @@ class LoginWindow(QMainWindow):
         # Inputs with modern style
         input_style = (
             "QLineEdit { padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; background:#ffffff; }"
-            "QLineEdit:focus { border:1px solid #1976d2; }"
+            "QLineEdit:focus { border:1px solid #1A73E8; }"
         )
 
         self.login_username = QLineEdit()
@@ -371,8 +370,8 @@ class LoginWindow(QMainWindow):
         login_btn = QPushButton("Sign In")
         login_btn.setCursor(Qt.PointingHandCursor)
         login_btn.setStyleSheet("""
-            QPushButton { background:#1976d2; color:#ffffff; border:none; padding:10px 16px; border-radius:8px; font-weight:700; }
-            QPushButton:hover { background:#165fa8; }
+            QPushButton { background:#1A73E8; color:#ffffff; border:none; padding:10px 16px; border-radius:8px; font-weight:700; }
+            QPushButton:hover { background:#114488; }
         """)
         login_btn.clicked.connect(self.login)
         card_layout.addWidget(login_btn)
@@ -383,11 +382,11 @@ class LoginWindow(QMainWindow):
             QPushButton {
                 background: none;
                 border: none;
-                color: #6366f1;
+                color: #1A73E8;
                 font-size: 13px;
                 text-decoration: underline;
             }
-            QPushButton:hover { color: #4f46e5; }
+            QPushButton:hover { color: #114488; }
         """)
         forgot_link.setCursor(Qt.PointingHandCursor)
         forgot_link.clicked.connect(self.open_forgot_password)
@@ -396,7 +395,7 @@ class LoginWindow(QMainWindow):
         # Register link
         register_link = QLabel("Don't have an account? <a href='#'>Register your shop</a>")
         register_link.setAlignment(Qt.AlignCenter)
-        register_link.setStyleSheet("color:#1976d2;")
+        register_link.setStyleSheet("color:#1A73E8;")
         register_link.setOpenExternalLinks(False)
         register_link.linkActivated.connect(lambda _: self.tab_widget.setCurrentIndex(1))
         card_layout.addWidget(register_link)
@@ -423,7 +422,7 @@ class LoginWindow(QMainWindow):
         subtitle = QLabel("Join our printing network")
         subtitle.setAlignment(Qt.AlignCenter)
         subtitle.setFont(QFont("Segoe UI", 16, QFont.Bold))
-        subtitle.setStyleSheet("color:#1976d2;")
+        subtitle.setStyleSheet("color:#1A73E8;")
         outer.addWidget(subtitle)
 
         # Card
@@ -435,7 +434,7 @@ class LoginWindow(QMainWindow):
 
         input_style = (
             "QLineEdit { padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; background:#ffffff; }"
-            "QLineEdit:focus { border:1px solid #1976d2; }"
+            "QLineEdit:focus { border:1px solid #1A73E8; }"
         )
 
         self.reg_shop_name = QLineEdit()
@@ -468,15 +467,15 @@ class LoginWindow(QMainWindow):
         register_btn = QPushButton("Register")
         register_btn.setCursor(Qt.PointingHandCursor)
         register_btn.setStyleSheet("""
-            QPushButton { background:#1976d2; color:#ffffff; border:none; padding:10px 16px; border-radius:8px; font-weight:700; }
-            QPushButton:hover { background:#165fa8; }
+            QPushButton { background:#1A73E8; color:#ffffff; border:none; padding:10px 16px; border-radius:8px; font-weight:700; }
+            QPushButton:hover { background:#114488; }
         """)
         register_btn.clicked.connect(self.register)
         form.addWidget(register_btn)
 
         login_link = QLabel("Already have an account? <a href='#'>Login here</a>")
         login_link.setAlignment(Qt.AlignCenter)
-        login_link.setStyleSheet("color:#1976d2;")
+        login_link.setStyleSheet("color:#1A73E8;")
         login_link.setOpenExternalLinks(False)
         login_link.linkActivated.connect(lambda _: self.tab_widget.setCurrentIndex(0))
         form.addWidget(login_link)
@@ -599,7 +598,7 @@ class LoginWindow(QMainWindow):
     
     def show_success_message(self, message):
         """Show a success toast message that auto-disappears"""
-        self.show_toast_message(message, "#10b981", 1000)  # Green color, 1 second
+        self.show_toast_message(message, "#34A853", 1000)  # Green color, 1 second
     
     def show_error_message(self, message):
         """Show an error toast message that auto-disappears"""
@@ -651,8 +650,9 @@ def main():
     # Initialize error handling
     initialize_error_handling()
 
-    # Initialize database
-    safe_execute(init_database, error_context="DATABASE_INIT", show_dialog=True)
+    # The FastAPI backend owns all persistence now; the desktop app no longer
+    # bootstraps a local SQLAlchemy schema. Any legacy `shared.database`
+    # imports that remain are deprecated and will be removed in a follow-up.
 
     import os
     import sys
@@ -678,7 +678,64 @@ def main():
     from shopkeeper_app.licensing import verify_startup_license
     if not verify_startup_license():
         sys.exit(0)
-    
+
+    # --- Check for updates (background) ---
+    def check_updates_on_startup():
+        """Check for updates in background and notify user"""
+        try:
+            from shared.auto_updater import check_for_updates_async
+            from shared import version as app_version
+
+            def on_update_available(update_info):
+                """Show update notification dialog"""
+                try:
+                    from PyQt5.QtWidgets import QMessageBox
+
+                    msg_box = QMessageBox()
+                    msg_box.setWindowTitle("Update Available")
+                    msg_box.setIcon(QMessageBox.Information)
+
+                    version_str = update_info.get('version', 'Unknown')
+                    is_critical = update_info.get('critical', False)
+                    release_notes = update_info.get('release_notes', 'New version available')
+
+                    if is_critical:
+                        msg_box.setText(f"Critical Update Required: v{version_str}")
+                        msg_box.setInformativeText(
+                            f"A critical security update is available.\n\n{release_notes}\n\n"
+                            "The application will now download and install the update."
+                        )
+                        msg_box.setStandardButtons(QMessageBox.Ok)
+                        msg_box.exec_()
+
+                        # Start automatic download for critical updates
+                        from shared.auto_updater import download_and_install_async
+                        download_and_install_async(update_info)
+                    else:
+                        msg_box.setText(f"Update Available: v{version_str}")
+                        msg_box.setInformativeText(
+                            f"Current version: v{app_version.VERSION}\n"
+                            f"Latest version: v{version_str}\n\n{release_notes}\n\n"
+                            "Would you like to download and install this update?"
+                        )
+                        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+
+                        result = msg_box.exec_()
+                        if result == QMessageBox.Yes:
+                            from shared.auto_updater import download_and_install_async
+                            download_and_install_async(update_info)
+                except Exception as e:
+                    logger.error(f"Error showing update dialog: {e}")
+
+            # Check for updates in background
+            check_for_updates_async(callback=on_update_available)
+            logger.info("Background update check initiated")
+        except Exception as e:
+            logger.warning(f"Update check failed: {e}")
+
+    # Start update check after a short delay (non-blocking)
+    QTimer.singleShot(3000, check_updates_on_startup)  # Check after 3 seconds
+
     # Set up fast shutdown handling
     def force_quit():
         """Force quit the application immediately"""
@@ -696,8 +753,17 @@ def main():
     login_window = safe_execute(LoginWindow, error_context="LOGIN_WINDOW_CREATION", show_dialog=True)
     if login_window:
         if saved_session:
-            logger.info("Auto-login session found")
-            login_window.open_dashboard(saved_session)
+            logger.info("Auto-login session found, refreshing tokens...")
+            # Validate the saved session and refresh tokens before opening the
+            # dashboard. resume_session() refreshes the access token, mints a
+            # fresh agent JWT, and returns an updated shopkeeper_data dict.
+            fresh = login_window.auth_manager.resume_session()
+            if fresh:
+                logger.info("Session resumed successfully")
+                login_window.open_dashboard(fresh)
+            else:
+                logger.info("Saved session expired or invalid, showing login")
+                login_window.show()
         else:
             login_window.show()
         
