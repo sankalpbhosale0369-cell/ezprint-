@@ -69,8 +69,11 @@ class PrinterManager:
         self.thread_safe_discovery = ThreadSafePrinterManager()
         self.thread_safe_discovery.start_discovery(interval=30)  # Discover every 30 seconds
         
-        # Track jobs where SumatraPDF reported success (for fast-printer detection)
+        # Jobs where the local print pipeline reported success (Sumatra, GDI, etc.).
+        # Used when the Windows spooler never shows our doc name (very fast printers).
         self._sumatra_ok_jobs = set()
+        # Invalidate spooler poll callbacks when stopping or restarting polling for a job_id.
+        self._job_poll_generation = {}
 
         # Initialize enhanced network printing
         self.enhanced_network_printing = EnhancedNetworkPrinting()
@@ -292,7 +295,7 @@ class PrinterManager:
             ("HP 1100", False, False, "single"),
             ("HP 1200", False, False, "single"),
             ("HP 1300", False, False, "single"),
-            
+
             # HP LaserJet series - Explicit Duplex Whitelist
             ("HP LaserJet M402d", False, True, "duplex"),
             ("HP LaserJet P2055", False, True, "duplex"),
@@ -306,53 +309,202 @@ class PrinterManager:
             ("HP 4250", False, True, "duplex"),
             ("HP 4350", False, True, "duplex"),
             ("HP 5200", False, True, "duplex"),
-            
+
             # HP LaserJet series - Generic Fallback (Single-side)
             ("HP LaserJet", False, False, "single"),
-            
+
             # HP Color LaserJet series
             ("HP Color LaserJet", True, True, "color"),
             ("HP CP", True, True, "color"),  # Color LaserJet CP series
             ("HP M", True, True, "color"),    # HP Color LaserJet M series
-            
+
             # HP Inkjet series (typically color, some duplex)
             ("HP DeskJet", True, False, "color"),
             ("HP OfficeJet", True, True, "color"),
             ("HP Envy", True, False, "color"),
             ("HP Photosmart", True, False, "color"),
-            
+            ("HP Smart Tank", True, False, "color"),        # HP Smart Tank ink tank series
+            ("HP Ink Tank", True, False, "color"),           # HP Ink Tank series
+            ("HP PageWide", True, True, "color"),            # HP PageWide commercial inkjet
+            ("HP DesignJet", True, False, "color"),          # HP wide-format / plotter
+            ("HP Neverstop", False, True, "duplex"),         # HP Neverstop mono laser
+
             # Canon printers
             ("Canon PIXMA", True, False, "color"),
             ("Canon imageCLASS", False, True, "duplex"),
             ("Canon LBP", False, True, "duplex"),  # Laser Beam Printer
             ("Canon i-SENSYS", False, True, "duplex"),
-            
+            ("Canon imageRUNNER ADVANCE", True, True, "color"),  # Commercial MFP (color)
+            ("Canon imageRUNNER", False, True, "duplex"),        # Commercial MFP (mono)
+            ("Canon imagePRESS", True, True, "color"),           # Production press
+            ("Canon imagePROGRAF", True, False, "color"),        # Large-format
+            ("Canon MAXIFY", True, True, "color"),               # Business inkjet
+            ("Canon SELPHY", True, False, "color"),              # Compact photo printer
+            ("Canon MF", False, True, "duplex"),                 # MF series laser MFP
+            ("Canon iR", False, True, "duplex"),                 # Shorthand for imageRUNNER
+
             # Epson printers
             ("Epson Stylus", True, False, "color"),
             ("Epson WorkForce", True, True, "color"),
             ("Epson Expression", True, False, "color"),
             ("Epson EcoTank", True, False, "color"),
-            
+            ("Epson SureColor", True, False, "color"),           # Wide-format / production
+            ("Epson ColorWorks", True, False, "color"),          # Label printer
+            ("Epson AcuLaser", False, True, "duplex"),           # Mono laser
+            ("Epson AL-", False, True, "duplex"),                # AcuLaser shorthand
+            ("Epson ET-", True, False, "color"),                 # EcoTank model numbers
+            ("Epson WF-", True, True, "color"),                  # WorkForce model numbers
+            ("Epson L", True, False, "color"),                   # Epson L-series ink tank
+
             # Brother printers
             ("Brother HL", False, True, "duplex"),  # Laser series
             ("Brother MFC", True, True, "color"),   # Multi-Function Color
             ("Brother DCP", True, False, "color"),  # Desktop Color Printer
-            
+            ("Brother TN", False, True, "duplex"),               # Toner-based mono
+
             # Samsung printers
             ("Samsung ML", False, True, "duplex"),  # Mono Laser
             ("Samsung CLP", True, True, "color"),   # Color Laser Printer
             ("Samsung Xpress", False, True, "duplex"),
-            
-            # Xerox printers
+            ("Samsung ProXpress", False, True, "duplex"),        # Business mono laser
+            ("Samsung MultiXpress", True, True, "color"),        # Commercial MFP
+            ("Samsung SCX", False, True, "duplex"),              # SCX MFP series
+            ("Samsung CLX", True, True, "color"),                # Color MFP series
+
+            # Xerox printers — commercial / production
+            ("Xerox AltaLink", True, True, "color"),             # Mid-range commercial MFP
+            ("Xerox VersaLink", True, True, "color"),            # Office / workgroup MFP
+            ("Xerox PrimeLink", True, True, "color"),            # High-volume commercial
+            ("Xerox Versant", True, True, "color"),              # Production press
+            ("Xerox iGen", True, True, "color"),                 # Digital production press
+            ("Xerox Color", True, True, "color"),                # Generic color models
+            ("Xerox C", True, True, "color"),                    # C-prefix color models (C7020 etc.)
+            ("Xerox D", False, True, "duplex"),                  # D-prefix mono production
+            ("Xerox B", False, True, "duplex"),                  # B-prefix mono workgroup
             ("Xerox Phaser", True, True, "color"),
             ("Xerox WorkCentre", True, True, "color"),
-            
+            ("Xerox Nuvera", False, True, "duplex"),             # Production mono
+            ("Xerox DocuColor", True, True, "color"),            # Legacy production color
+            ("Xerox DocuPrint", False, True, "duplex"),          # Legacy office mono
+            ("Xerox DocuTech", False, True, "duplex"),           # Production mono
+            ("Xerox ColorQube", True, True, "color"),            # Solid ink (legacy)
+
+            # Ricoh printers — commercial copiers / MFP
+            ("RICOH Pro", True, True, "color"),                  # Production series
+            ("RICOH MP C", True, True, "color"),                 # MP C = color MFP
+            ("RICOH MP", False, True, "duplex"),                 # MP = mono MFP
+            ("RICOH IM C", True, True, "color"),                 # Intelligent Model Color
+            ("RICOH IM", False, True, "duplex"),                 # Intelligent Model mono
+            ("RICOH SP C", True, True, "color"),                 # SP C = color desktop
+            ("RICOH SP", False, True, "duplex"),                 # SP = mono desktop
+            ("RICOH Aficio", False, True, "duplex"),             # Legacy Aficio line
+            ("RICOH P C", True, True, "color"),                  # P C-series color
+            ("RICOH P ", False, True, "duplex"),                 # P-series mono
+            ("Savin", False, True, "duplex"),                    # Ricoh rebrand (Savin)
+            ("Lanier", False, True, "duplex"),                   # Ricoh rebrand (Lanier)
+            ("Gestetner", False, True, "duplex"),                # Ricoh rebrand (Gestetner)
+
+            # Konica Minolta — commercial MFP / production
+            ("bizhub C", True, True, "color"),                   # bizhub C = color MFP
+            ("bizhub PRO", True, True, "color"),                 # Production color
+            ("bizhub PRESS", True, True, "color"),               # Digital press
+            ("bizhub", False, True, "duplex"),                   # bizhub mono MFP
+            ("Konica Minolta", False, True, "duplex"),           # Generic fallback
+            ("magicolor", True, True, "color"),                  # Legacy desktop color
+            ("PagePro", False, True, "duplex"),                  # Legacy mono desktop
+
+            # Kyocera / Kyocera Mita — commercial MFP
+            ("Kyocera ECOSYS M", False, True, "duplex"),         # ECOSYS M = MFP
+            ("Kyocera ECOSYS P", False, True, "duplex"),         # ECOSYS P = printer
+            ("Kyocera TASKalfa", False, True, "duplex"),         # TASKalfa commercial MFP
+            ("Kyocera CS", False, True, "duplex"),               # Copystar rebrand
+            ("Copystar", False, True, "duplex"),                 # Kyocera rebrand
+            ("Kyocera FS-C", True, True, "color"),               # Legacy color
+            ("Kyocera FS-", False, True, "duplex"),              # Legacy mono
+            ("Kyocera", False, True, "duplex"),                  # Generic fallback
+
+            # Sharp — commercial MFP / copiers
+            ("Sharp MX-", True, True, "color"),                  # MX series (color MFP)
+            ("Sharp AR-", False, True, "duplex"),                # AR series (mono copier)
+            ("Sharp BP-", True, True, "color"),                  # BP series (newer MFP)
+            ("Sharp DX-", True, True, "color"),                  # DX series (color)
+            ("Sharp", False, True, "duplex"),                    # Generic fallback
+
+            # Toshiba — commercial MFP / copiers
+            ("Toshiba e-STUDIO", False, True, "duplex"),         # e-STUDIO series
+            ("TOSHIBA e-STUDIO", False, True, "duplex"),
+            ("e-STUDIO", False, True, "duplex"),                 # Shorthand
+            ("Toshiba", False, True, "duplex"),                  # Generic fallback
+
+            # OKI — office / commercial
+            ("OKI MC", True, True, "color"),                     # MC = color MFP
+            ("OKI C", True, True, "color"),                      # C-series color
+            ("OKI MB", False, True, "duplex"),                   # MB = mono MFP
+            ("OKI B", False, True, "duplex"),                    # B-series mono
+            ("OKI Pro", True, True, "color"),                    # Pro series
+            ("Okidata", False, True, "duplex"),                  # Legacy name
+
+            # Pantum — budget personal / small office
+            ("Pantum M", False, True, "duplex"),                 # MFP
+            ("Pantum P", False, False, "single"),                # Single-function mono
+            ("Pantum CP", True, False, "color"),                 # Color series
+            ("Pantum CM", True, True, "color"),                  # Color MFP
+            ("Pantum", False, False, "single"),                  # Generic fallback
+
+            # Dell printers (often rebranded Lexmark / Xerox)
+            ("Dell Color", True, True, "color"),
+            ("Dell C", True, True, "color"),                     # C-prefix color laser
+            ("Dell B", False, True, "duplex"),                   # B-prefix mono laser
+            ("Dell E", False, True, "duplex"),                   # E-prefix mono
+            ("Dell H", False, True, "duplex"),                   # H-prefix mono MFP
+            ("Dell S", True, True, "color"),                     # S-prefix color MFP
+            ("Dell", False, False, "single"),                    # Generic fallback
+
             # Lexmark printers
             ("Lexmark E", False, True, "duplex"),   # E series (mono)
             ("Lexmark C", True, True, "color"),     # C series (color)
             ("Lexmark X", True, True, "color"),     # X series (color)
-            
-            # Generic patterns (fallback)
+            ("Lexmark MS", False, True, "duplex"),               # MS = mono single-function
+            ("Lexmark MX", False, True, "duplex"),               # MX = mono MFP
+            ("Lexmark CS", True, True, "color"),                 # CS = color single-function
+            ("Lexmark CX", True, True, "color"),                 # CX = color MFP
+            ("Lexmark B", False, True, "duplex"),                # B-series budget mono
+            ("Lexmark MB", False, True, "duplex"),               # MB = mono MFP budget
+
+            # Zebra — label / receipt / industrial
+            ("Zebra ZD", False, False, "single"),                # ZD-series desktop label
+            ("Zebra ZT", False, False, "single"),                # ZT-series industrial label
+            ("Zebra GK", False, False, "single"),                # GK desktop label
+            ("Zebra GC", False, False, "single"),                # GC desktop label
+            ("Zebra LP", False, False, "single"),                # LP desktop label
+            ("Zebra TLP", False, False, "single"),               # TLP thermal transfer
+            ("Zebra", False, False, "single"),                   # Generic fallback
+
+            # RISO — duplicator / production
+            ("RISO ComColor", True, False, "color"),             # Inkjet production
+            ("RISO", False, False, "single"),                    # Duplicator
+
+            # Develop (Konica Minolta rebrand, common in Europe)
+            ("Develop ineo+", True, True, "color"),              # Color MFP
+            ("Develop ineo", False, True, "duplex"),             # Mono MFP
+
+            # Sindoh (common in Asia)
+            ("Sindoh", False, True, "duplex"),
+
+            # Muratec (Konica Minolta subsidiary)
+            ("Muratec", False, True, "duplex"),
+
+            # Receipt / POS printers
+            ("EPSON TM-", False, False, "single"),               # Epson POS receipt
+            ("Star TSP", False, False, "single"),                # Star Micronics POS
+            ("Star SP", False, False, "single"),                 # Star Micronics impact
+            ("Citizen CT-", False, False, "single"),             # Citizen POS
+            ("Bixolon", False, False, "single"),                 # Bixolon POS
+
+            # Generic patterns (fallback) — keep these LAST
+            ("Multifunction", False, True, "duplex"),
+            ("MFP", False, True, "duplex"),
+            ("Copier", False, True, "duplex"),
             ("Color", True, False, "color"),
             ("Laser", False, True, "duplex"),
         ]
@@ -673,7 +825,14 @@ class PrinterManager:
             norm = re.sub(r':(9100|631|515|port\d+|ipp|raw|lpd|np)$', '', norm, flags=re.IGNORECASE).strip()
 
             # Vendor Preference: If driver_name has vendor but name doesn't, prefer driver
-            vendors = ['CANON', 'HP', 'HEWLETT-PACKARD', 'EPSON', 'BROTHER', 'SAMSUNG', 'LEXMARK', 'XEROX', 'RICOH', 'ZEBRA', 'KONICA', 'KYOCERA']
+            vendors = [
+                'CANON', 'HP', 'HEWLETT-PACKARD', 'EPSON', 'BROTHER',
+                'SAMSUNG', 'LEXMARK', 'XEROX', 'RICOH', 'ZEBRA',
+                'KONICA', 'KYOCERA', 'SHARP', 'TOSHIBA', 'OKI',
+                'OKIDATA', 'PANTUM', 'DELL', 'BIZHUB', 'COPYSTAR',
+                'SAVIN', 'LANIER', 'GESTETNER', 'DEVELOP', 'SINDOH',
+                'MURATEC', 'RISO', 'BIXOLON', 'CITIZEN', 'STAR',
+            ]
             u_name = norm.upper()
             u_driver = (driver_name or "").upper()
             
@@ -692,7 +851,14 @@ class PrinterManager:
             return norm
 
         # Virtual Filtering
-        virtual_names = ["MICROSOFT PRINT TO PDF", "XPS DOCUMENT WRITER", "ONENOTE", "FAX", "ROOT PRINT QUEUE"]
+        virtual_names = [
+            "MICROSOFT PRINT TO PDF", "XPS DOCUMENT WRITER",
+            "ONENOTE", "FAX", "ROOT PRINT QUEUE",
+            "SEND TO ONENOTE", "MICROSOFT XPS", "FOXIT READER PDF",
+            "ADOBE PDF", "BULLZIP PDF", "CUTEPDF", "PDFCREATOR",
+            "PDF-XCHANGE", "NITRO PDF", "DOPDF", "PRIMO PDF",
+            "PRINT TO EVERNOTE", "SNAGIT", "REMOTEFX",
+        ]
         
         # Identity Map: {identity_key: [list of entries]}
         physical_groups = {}
@@ -1179,11 +1345,18 @@ class PrinterManager:
                         if t.is_alive():
                             # Sumatra is *still* running after 90s total — let it finish
                             # in the background (daemon thread) but do NOT layer GDI on top.
+                            # Do not report failure to the UI: the physical print may still
+                            # complete; the spooler poller will confirm or time out.
                             logger.warning(
                                 "SumatraPDF still alive after 90s total; "
-                                "skipping GDI fallback to avoid double-print"
+                                "deferring success/failure to spooler polling (no GDI double-print)"
                             )
-                            return False, "SumatraPDF printing timed out (90s)"
+                            if job_id:
+                                self._sumatra_ok_jobs.add(job_id)
+                            return (
+                                True,
+                                "Print dispatched (Sumatra still running; awaiting spooler confirmation)",
+                            )
 
                         # Thread finished during extended wait but reported failure
                         logger.warning(f"SumatraPDF failed after extended wait: {result_holder['msg']}")
@@ -1239,15 +1412,30 @@ class PrinterManager:
     def start_job_status_polling(self, job_id, callback):
         """Start polling Windows spooler for job status updates"""
         try:
-            if job_id in self.job_status_threads:
-                return  # Already polling
-            
+            # New polling session: clear any stale cancel bit from a prior run, bump
+            # generation so older poller threads cannot clobber UI with Failed/Completed.
+            if job_id not in self.job_cancel_flags:
+                self.job_cancel_flags[job_id] = threading.Event()
+            else:
+                self.job_cancel_flags[job_id].clear()
+
+            self._job_poll_generation[job_id] = self._job_poll_generation.get(job_id, 0) + 1
+            gen = self._job_poll_generation[job_id]
+
             def poll_job_status():
                 """
                 CRITICAL FIX: Poll Windows spooler for actual printer job status.
                 Completed status is set ONLY after OS confirms job finished.
                 """
                 try:
+
+                    def _emit(status, progress, details):
+                        if self._job_poll_generation.get(job_id) != gen:
+                            return
+                        try:
+                            callback(job_id, status, progress, details)
+                        except Exception:
+                            logger.exception("job status callback failed job=%s", job_id)
                     # Keep polling in a loop for a bounded time
                     start_time = time.time()
                     timeout_secs = int(PRINT_CONFIRMATION_TIMEOUT_SECS or 180)
@@ -1269,6 +1457,9 @@ class PrinterManager:
                         if job_id in self.job_cancel_flags and self.job_cancel_flags[job_id].is_set():
                             logger.info(f"Stopping status polling for job {job_id} (cancelled)")
                             return
+                        if self._job_poll_generation.get(job_id) != gen:
+                            logger.debug("Stopping status polling for job %s (stale generation)", job_id)
+                            return
 
                         current_time = time.time()
                         elapsed = current_time - start_time
@@ -1285,7 +1476,7 @@ class PrinterManager:
                                     continue
                                 else:
                                     logger.warning(f"No printer determined for job {job_id} after 10s")
-                                    callback(job_id, 'Error', 0, 'No printer determined for polling')
+                                    _emit('Error', 0, 'No printer determined for polling')
                                     return
 
                             try:
@@ -1294,7 +1485,7 @@ class PrinterManager:
                                 # Printer unavailable - wait longer before failing
                                 if elapsed > 30.0:  # Give printer 30 seconds to become available
                                     logger.warning(f"Printer {poll_printer} unavailable after 30s: {e}")
-                                    callback(job_id, 'Failed', 0, f'Printer unavailable: {e}')
+                                    _emit('Failed', 0, f'Printer unavailable: {e}')
                                     return
                                 time.sleep(1.0)
                                 continue
@@ -1307,7 +1498,7 @@ class PrinterManager:
                             # Spooler error - wait longer before failing
                             if elapsed > 30.0:
                                 logger.warning(f"Spooler error after 30s: {e}")
-                                callback(job_id, 'Failed', 0, f'Spooler error: {e}')
+                                _emit('Failed', 0, f'Spooler error: {e}')
                                 return
                             time.sleep(1.0)
                             continue
@@ -1342,10 +1533,10 @@ class PrinterManager:
                                     if job_id in self._sumatra_ok_jobs:
                                         self._sumatra_ok_jobs.discard(job_id)
                                         logger.info(f"Job {job_id} completed (fast commercial printer: job processed before poll window)")
-                                        callback(job_id, 'Completed', 100, 'Printed successfully')
+                                        _emit('Completed', 100, 'Printed successfully')
                                         return
                                     logger.warning(f"Job {job_id} never appeared in spooler after {elapsed:.1f}s")
-                                    callback(job_id, 'Failed', 0, 'Job never appeared in print spooler')
+                                    _emit('Failed', 0, 'Job never appeared in print spooler')
                                     return
                             else:
                                 # Job was seen before but now missing - might be completed
@@ -1358,12 +1549,12 @@ class PrinterManager:
                                     if job_was_printing or (job_last_status and job_last_status not in ['Failed', 'Error', 'Offline', 'Paper Out']):
                                         # Job disappeared after successful printing - mark Completed
                                         logger.info(f"Job {job_id} completed - disappeared from spooler after successful printing")
-                                        callback(job_id, 'Completed', 100, 'Job completed and removed from spooler')
+                                        _emit('Completed', 100, 'Job completed and removed from spooler')
                                         return
                                     else:
                                         # Job disappeared but was in error state - mark Failed
                                         logger.warning(f"Job {job_id} disappeared but was in error state: {job_last_status}")
-                                        callback(job_id, 'Failed', 0, f'Job disappeared in error state: {job_last_status}')
+                                        _emit('Failed', 0, f'Job disappeared in error state: {job_last_status}')
                                         return
                                 
                                 # Job missing but not enough consecutive misses yet - keep polling
@@ -1384,7 +1575,7 @@ class PrinterManager:
                             if status_flags & 0x00000002:  # JOB_STATUS_ERROR
                                 status = 'Failed'
                                 job_last_status = status
-                                callback(job_id, status, progress, f'Printer error - Pages: {pages_printed}/{total_pages}')
+                                _emit(status, progress, f'Printer error - Pages: {pages_printed}/{total_pages}')
                                 return  # Error state - stop polling
                             elif status_flags & 0x00000010:  # JOB_STATUS_PRINTING
                                 status = 'Printing'
@@ -1395,7 +1586,7 @@ class PrinterManager:
                                 status = 'Paper Out'
                             elif status_flags & 0x00000004:  # JOB_STATUS_DELETING
                                 status = 'Deleting'
-                                callback(job_id, status, progress, 'Job being deleted')
+                                _emit(status, progress, 'Job being deleted')
                                 return
                             elif status_flags & 0x00000001:  # JOB_STATUS_PAUSED
                                 status = 'Paused'
@@ -1406,7 +1597,7 @@ class PrinterManager:
                                 status = 'In Queue'
 
                             job_last_status = status
-                            callback(job_id, status, progress, f'Pages: {pages_printed}/{total_pages}')
+                            _emit(status, progress, f'Pages: {pages_printed}/{total_pages}')
 
                             # Continue polling to wait for job to finish and disappear
                             if status == 'Failed':
@@ -1424,14 +1615,14 @@ class PrinterManager:
                                         f"Job {job_id}: printer offline for {offline_retries} retries "
                                         f"({offline_retries * 30}s), marking as Failed"
                                     )
-                                    callback(
-                                        job_id, 'Failed', progress,
+                                    _emit(
+                                        'Failed', progress,
                                         'Printer offline too long — please check printer and reprint'
                                     )
                                     return
                                 # Notify shopkeeper and wait for printer to come back
-                                callback(
-                                    job_id, 'Offline', progress,
+                                _emit(
+                                    'Offline', progress,
                                     f'Printer offline. Waiting for printer to reconnect... '
                                     f'(retry {offline_retries}/{max_offline_retries})'
                                 )
@@ -1448,9 +1639,9 @@ class PrinterManager:
                         # Timeout check
                         if elapsed > timeout_secs:
                             if job_seen:
-                                callback(job_id, 'Failed', progress, f'Timed out after {timeout_secs}s - job still in spooler')
+                                _emit('Failed', progress, f'Timed out after {timeout_secs}s - job still in spooler')
                             else:
-                                callback(job_id, 'Failed', 0, f'Timed out after {timeout_secs}s - job never appeared')
+                                _emit('Failed', 0, f'Timed out after {timeout_secs}s - job never appeared')
                             return
 
                         time.sleep(0.3)  # Poll every 300ms for fast commercial printers
@@ -1465,7 +1656,7 @@ class PrinterManager:
                         
                 except Exception as e:
                     logger.error(f"Error polling job status: {e}")
-                    callback(job_id, 'Error', 0, str(e))
+                    _emit('Error', 0, str(e))
                     # Cleanup on error too
                     if job_id in self.job_status_threads:
                         del self.job_status_threads[job_id]
@@ -1484,10 +1675,15 @@ class PrinterManager:
     def stop_job_status_polling(self, job_id):
         """Stop polling for a specific job"""
         try:
-            if job_id in self.job_status_threads:
-                del self.job_status_threads[job_id]
-            if job_id in self.job_status_callbacks:
-                del self.job_status_callbacks[job_id]
+            # Invalidate any in-flight callbacks from a previous poller thread, then
+            # ask the loop to exit. A new print_job() clears the cancel bit when it
+            # starts the next polling session.
+            self._job_poll_generation[job_id] = self._job_poll_generation.get(job_id, 0) + 1
+            if job_id not in self.job_cancel_flags:
+                self.job_cancel_flags[job_id] = threading.Event()
+            self.job_cancel_flags[job_id].set()
+            self.job_status_threads.pop(job_id, None)
+            self.job_status_callbacks.pop(job_id, None)
         except Exception as e:
             logger.error(f"Error stopping job status polling: {e}")
 
@@ -1669,6 +1865,8 @@ class PrinterManager:
             hDC.EndDoc()
             hDC.DeleteDC()
 
+            if job_id:
+                self._sumatra_ok_jobs.add(job_id)
             return True, "Document sent to printer"
         except Exception as e:
             logger.error(f"GDI printing error: {e}")
@@ -2276,7 +2474,17 @@ class PrinterManager:
                 sumatra = self._find_sumatra_pdf()
                 if sumatra and os.path.exists(sumatra):
                     try:
-                        ok, msg = self._print_with_sumatra(sumatra, file_path, copies, page_range, orientation, print_side, color_mode, printer_name=target_printer)
+                        ok, msg = self._print_with_sumatra(
+                            sumatra,
+                            file_path,
+                            copies,
+                            page_range,
+                            orientation,
+                            print_side,
+                            color_mode,
+                            printer_name=target_printer,
+                            job_id=job_id,
+                        )
                         if ok:
                             return True, msg
                     except Exception as e:

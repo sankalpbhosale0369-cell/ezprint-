@@ -21,7 +21,7 @@ try:
 except ImportError:
     WEBENGINE_AVAILABLE = False
     logger.warning("QWebEngineWidgets not available. Charts will use fallback rendering.")
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QPoint, QMetaObject, Qt, QSize, QRect
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QPoint, QMetaObject, QSize, QRect
 from PyQt5.QtGui import QPixmap, QFont, QIcon, QKeySequence, QPainter, QColor, QPaintEvent, QPen, QBrush
 from PyQt5.QtWidgets import QStyle, QGraphicsDropShadowEffect
 import weakref
@@ -32,8 +32,6 @@ from urllib.parse import unquote
 import re
 from datetime import datetime, timedelta, timezone
 import json
-
-import logging
 
 # Add parent directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -4193,7 +4191,7 @@ class DashboardWindow(QMainWindow):
             api_success = False
             if all_jobs is None:
                 shop_id = self.shopkeeper_data.get('shop_id')
-                success, api_data, error = self.api_client.get_dashboard(shop_id)
+                success, api_data, error = self.api_client.get_dashboard()
                 
                 if success and api_data:
                     logger.info("Dashboard data fetched successfully from API")
@@ -5588,6 +5586,9 @@ class DashboardWindow(QMainWindow):
                 for key, val in info.items():
                     if val is not None:
                         self.shopkeeper_data[key] = val
+                # Keep api_client.shop_slug in sync for any callers that need it.
+                if info.get('slug'):
+                    self.api_client.shop_slug = info['slug']
             else:
                 logger.warning("load_pricing: shop-info fetch failed: %s", err_i)
 
@@ -6312,26 +6313,7 @@ class DashboardWindow(QMainWindow):
                 self.show_toast("Job not found")
                 return
 
-            remote_url = self._fetch_remote_job_url(getattr(job, 'job_id', None))
-            if remote_url:
-                import webbrowser
-                webbrowser.open(remote_url)
-
-            elif job.file_path and os.path.exists(job.file_path):
-                try:
-                    if sys.platform.startswith('win'):
-                        os.startfile(job.file_path)
-                    elif sys.platform == 'darwin':
-                        import subprocess
-                        subprocess.Popen(['open', job.file_path])
-                    else:
-                        import subprocess
-                        subprocess.Popen(['xdg-open', job.file_path])
-                except Exception:
-                    self.show_toast("Unable to open file")
-
-            else:
-                self.show_toast("File not found")
+            self._download_and_open_job(job)
         except Exception as e:
             logger.error(f"Error opening file: {e}")
 
@@ -6434,24 +6416,54 @@ class DashboardWindow(QMainWindow):
             return data.get('url') or data.get('download_url')
         return None
 
+    @staticmethod
+    def _open_local_file(path):
+        """Open a local file with the platform's default viewer."""
+        if sys.platform.startswith('win'):
+            os.startfile(path)
+        elif sys.platform == 'darwin':
+            import subprocess
+            subprocess.Popen(['open', path])
+        else:
+            import subprocess
+            subprocess.Popen(['xdg-open', path])
+
+    def _download_and_open_job(self, job):
+        """Download the job file via presigned URL to a temp dir, then open it
+        with the system viewer.  Falls back to the local ``file_path`` cache."""
+        import tempfile
+        job_id = getattr(job, 'job_id', None)
+        api_client = getattr(self, 'api_client', None)
+        local_path = None
+
+        # 1. Try to stream the file from backend via presigned URL
+        if api_client and job_id:
+            try:
+                safe_name = ''.join(
+                    c if c.isalnum() or c in ('.', '_', '-') else '_'
+                    for c in (getattr(job, 'filename', None) or f"{job_id}.pdf").split('/')[-1]
+                )
+                temp_dir = os.path.join(tempfile.gettempdir(), 'ezprint_previews')
+                os.makedirs(temp_dir, exist_ok=True)
+                candidate = os.path.join(temp_dir, f"{job_id}_{safe_name}")
+                ok, _path, err = api_client.download_job_file(job_id, candidate)
+                if ok and os.path.exists(candidate):
+                    local_path = candidate
+            except Exception as dl_err:
+                logger.debug("Preview download failed for %s: %s", job_id, dl_err)
+
+        # 2. Fall back to locally cached file_path
+        if not local_path and job and getattr(job, 'file_path', None) and os.path.exists(job.file_path):
+            local_path = job.file_path
+
+        if local_path:
+            self._open_local_file(local_path)
+        else:
+            self.show_toast("File not available")
+
     def _open_job_file(self, job):
         try:
-            remote_url = self._fetch_remote_job_url(getattr(job, 'job_id', None))
-            if remote_url:
-                import webbrowser
-                webbrowser.open(remote_url)
-            elif job and job.file_path and os.path.exists(job.file_path):
-                if sys.platform.startswith('win'):
-                    os.startfile(job.file_path)
-                elif sys.platform == 'darwin':
-                    import subprocess
-                    subprocess.Popen(['open', job.file_path])
-                else:
-                    import subprocess
-                    subprocess.Popen(['xdg-open', job.file_path])
-            else:
-                self.show_toast("File not found")
-
+            self._download_and_open_job(job)
         except Exception:
             self.show_toast("Unable to open file")
 
@@ -9904,18 +9916,11 @@ class DashboardWindow(QMainWindow):
             
             file_path = getattr(job, 'file_path', None)
             
-            remote_url = self._fetch_remote_job_url(getattr(job, 'job_id', None))
-            if remote_url:
-                import webbrowser
-                webbrowser.open(remote_url)
-            elif file_path and os.path.exists(file_path):
-                try:
-                    os.startfile(file_path)
-                except Exception as e:
-                    logger.error(f"Error opening file {file_path}: {e}")
-                    QMessageBox.critical(self, "Error", "Unable to open the file. Please check file permissions.")
-            else:
-                QMessageBox.critical(self, "File Error", "File not found for this job.")
+            try:
+                self._download_and_open_job(job)
+            except Exception as e:
+                logger.error(f"Error opening file for job: {e}")
+                QMessageBox.critical(self, "Error", "Unable to open the file.")
                 
         except Exception as e:
             logger.error(f"Fatal error in bulk_view_jobs: {e}")
@@ -10329,10 +10334,8 @@ class DashboardWindow(QMainWindow):
                 import threading
                 def force_stop_websocket():
                     try:
-                        if hasattr(self.websocket_client, 'client') and self.websocket_client.client:
-                            if hasattr(self.websocket_client.client, 'running') and self.websocket_client.client.running:
-                                logger.warning("WebSocket still running, forcing stop")
-                                self.websocket_client.client.running = False
+                        if hasattr(self.websocket_client, 'stop'):
+                            self.websocket_client.stop()
                     except Exception:
                         pass
                 
@@ -10629,12 +10632,15 @@ class DashboardWindow(QMainWindow):
             
             # If path doesn't exist or file is missing, generate new QR code
             from shared.qr_generator import generate_qr_code
-            
-            shop_id = self.shopkeeper_data['shop_id']
-            shop_name = self.shopkeeper_data['shop_name']
-            
+
+            # Use slug for the customer-facing URL (/shop/{slug}).
+            # Fall back to shop_id so existing installs don't crash if
+            # get_shop_info hasn't been called yet.
+            shop_slug = self.shopkeeper_data.get('slug') or self.shopkeeper_data.get('shop_id', '')
+            shop_name = self.shopkeeper_data.get('shop_name', '')
+
             # Generate new QR code
-            new_qr_path = generate_qr_code(shop_id, shop_name)
+            new_qr_path = generate_qr_code(shop_slug, shop_name)
             
             # Update shopkeeper data
             self.shopkeeper_data['qr_code_path'] = new_qr_path

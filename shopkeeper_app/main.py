@@ -3,8 +3,8 @@ Main application entry point for shopkeeper desktop app
 """
 import sys
 import os
-from datetime import datetime
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+from datetime import datetime, timedelta
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QHBoxLayout, QLabel, QPushButton, QLineEdit, 
                            QMessageBox, QTabWidget, QGroupBox, QTextEdit,
                            QComboBox, QCheckBox, QFormLayout, QFrame,
@@ -37,9 +37,11 @@ logger = logging.getLogger(__name__)
 
 
 import json
-from datetime import datetime, timedelta
 
-SESSION_DIR = os.path.join(os.getenv("APPDATA"), "EzPrint")
+SESSION_DIR = os.path.join(
+    os.environ.get("APPDATA") or os.path.expanduser("~/.ezprint"),
+    "EzPrint",
+)
 SESSION_FILE = os.path.join(SESSION_DIR, "session.json")
 
 def save_session(shopkeeper_data):
