@@ -1,6 +1,7 @@
 """
 QR Code generation utilities
 """
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -26,6 +27,24 @@ def _qr_storage_dir() -> Path:
         data_dir = Path(BASE_DIR) / "qr_codes"
         data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
+
+
+def _expected_qr_filename(shop_slug: str) -> str:
+    """Deterministic filename bound to the current EZPRINT_BASE_URL.
+
+    We stamp a short hash of the full upload URL into the filename so that
+    when the agent is pointed at a new backend (e.g. migrating from
+    ``ezprints.duckdns.org`` to the Azure host) the cached PNG is no longer
+    a cache hit, forcing a regenerate with the correct URL encoded.
+    """
+    upload_url = f"{EZPRINT_BASE_URL}/shop/{shop_slug}"
+    url_hash = hashlib.sha1(upload_url.encode("utf-8")).hexdigest()[:10]
+    return f"qr_{shop_slug}_{url_hash}.png"
+
+
+def expected_qr_path(shop_slug: str) -> str:
+    """Return the absolute path the current-URL QR should live at."""
+    return str(_qr_storage_dir() / _expected_qr_filename(shop_slug))
 
 
 def generate_qr_code(shop_slug, shop_name):
@@ -57,10 +76,22 @@ def generate_qr_code(shop_slug, shop_name):
     qr_image = qr.make_image(fill_color="black", back_color="white")
 
     qr_dir = _qr_storage_dir()
-    qr_filename = f"qr_{shop_slug}.png"
+    qr_filename = _expected_qr_filename(shop_slug)
     qr_path = qr_dir / qr_filename
 
     qr_image.save(qr_path)
+
+    # Prune stale PNGs for the same slug that were built against a different
+    # base URL so the dashboard never has a chance to pick them up.
+    try:
+        for old in qr_dir.glob(f"qr_{shop_slug}*.png"):
+            if old.name != qr_filename:
+                try:
+                    old.unlink()
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
     return str(qr_path)
 

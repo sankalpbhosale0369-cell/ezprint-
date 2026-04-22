@@ -74,6 +74,11 @@ class PrinterManager:
         self._sumatra_ok_jobs = set()
         # Invalidate spooler poll callbacks when stopping or restarting polling for a job_id.
         self._job_poll_generation = {}
+        # Jobs for which `print_document_with_settings` is currently executing.
+        # The spooler poller consults this to avoid a premature "Job never
+        # appeared in spooler → Failed" when the print pipeline (Sumatra on a
+        # slow printer, WiFi dispatch, etc.) is still in flight.
+        self._pipeline_running = set()
 
         # Initialize enhanced network printing
         self.enhanced_network_printing = EnhancedNetworkPrinting()
@@ -1096,6 +1101,15 @@ class PrinterManager:
         
         settings keys: copies, page_range, page_size, orientation, print_side, color_mode, layout_pages
         """
+        if job_id:
+            self._pipeline_running.add(job_id)
+        try:
+            return self._print_document_with_settings_inner(file_path, file_type, settings, job_id)
+        finally:
+            if job_id:
+                self._pipeline_running.discard(job_id)
+
+    def _print_document_with_settings_inner(self, file_path, file_type, settings, job_id=None):
         # ===== PRINTER ROUTING INTEGRATION =====
         # Determine target printer for this job (routing or manual override)
         target_printer = None
@@ -1520,24 +1534,39 @@ class PrinterManager:
                         if not job_info:
                             # Job not found in spooler
                             if not job_seen:
-                                # Job hasn't appeared yet - wait with grace period
-                                if elapsed <= job_appear_grace_secs:
-                                    # Still within grace period, keep waiting
+                                # Fast-path: print pipeline already reported success.
+                                # Printer was faster than our poll cadence — mark Completed
+                                # once we've observed at least `job_appear_grace_secs` of absence
+                                # to be sure we didn't miss a late-appearing spooler row.
+                                if job_id in self._sumatra_ok_jobs:
+                                    if elapsed <= job_appear_grace_secs:
+                                        time.sleep(1.0)
+                                        continue
+                                    self._sumatra_ok_jobs.discard(job_id)
+                                    logger.info(
+                                        "Job %s completed (fast commercial printer: job processed before poll window)",
+                                        job_id,
+                                    )
+                                    _emit('Completed', 100, 'Printed successfully')
+                                    return
+
+                                # Pipeline still in flight (Sumatra rasterizing a large
+                                # PDF, WiFi dispatch, etc.): keep polling until it either
+                                # completes or the overall `timeout_secs` deadline hits.
+                                # We MUST NOT mark Failed here — the job may still print.
+                                if job_id in self._pipeline_running:
                                     time.sleep(1.0)
                                     continue
-                                else:
-                                    # Job never appeared in spooler
-                                    # Commercial printers (Canon ADV series) process jobs
-                                    # so fast that job appears and disappears before first poll.
-                                    # Check if SumatraPDF returned success for this job.
-                                    if job_id in self._sumatra_ok_jobs:
-                                        self._sumatra_ok_jobs.discard(job_id)
-                                        logger.info(f"Job {job_id} completed (fast commercial printer: job processed before poll window)")
-                                        _emit('Completed', 100, 'Printed successfully')
-                                        return
-                                    logger.warning(f"Job {job_id} never appeared in spooler after {elapsed:.1f}s")
-                                    _emit('Failed', 0, 'Job never appeared in print spooler')
-                                    return
+
+                                # Pipeline finished but neither a Sumatra OK marker
+                                # nor a spooler row ever appeared. Keep the original
+                                # grace behaviour.
+                                if elapsed <= job_appear_grace_secs:
+                                    time.sleep(1.0)
+                                    continue
+                                logger.warning(f"Job {job_id} never appeared in spooler after {elapsed:.1f}s")
+                                _emit('Failed', 0, 'Job never appeared in print spooler')
+                                return
                             else:
                                 # Job was seen before but now missing - might be completed
                                 consecutive_not_found += 1

@@ -10621,43 +10621,55 @@ class DashboardWindow(QMainWindow):
                 QTimer.singleShot(0, self.display_next_popup)
 
     def ensure_qr_code_exists(self):
-        """Ensure QR code exists, generate if missing"""
+        """Ensure QR code exists for the *current* backend URL, regenerating
+        when the previously-saved image was built against a different
+        ``EZPRINT_API_BASE_URL`` (e.g. after migrating from the ngrok /
+        duckdns host to the Azure host)."""
         try:
-            # Check if QR code path exists in shopkeeper data
-            qr_path = self.shopkeeper_data.get('qr_code_path')
-            
-            # If path exists and file exists, return it
-            if qr_path and os.path.exists(qr_path):
-                return qr_path
-            
-            # If path doesn't exist or file is missing, generate new QR code
-            from shared.qr_generator import generate_qr_code
+            from shared.qr_generator import expected_qr_path, generate_qr_code
 
-            # Use slug for the customer-facing URL (/shop/{slug}).
-            # Fall back to shop_id so existing installs don't crash if
-            # get_shop_info hasn't been called yet.
-            shop_slug = self.shopkeeper_data.get('slug') or self.shopkeeper_data.get('shop_id', '')
+            shop_slug = (
+                self.shopkeeper_data.get('slug')
+                or self.shopkeeper_data.get('shop_id', '')
+            )
+            shop_id = self.shopkeeper_data.get('shop_id', '')
             shop_name = self.shopkeeper_data.get('shop_name', '')
 
-            # Generate new QR code
+            target_path = expected_qr_path(shop_slug)
+            cached_path = self.shopkeeper_data.get('qr_code_path')
+
+            needs_regen = (
+                not cached_path
+                or not os.path.exists(cached_path)
+                or os.path.abspath(cached_path) != os.path.abspath(target_path)
+            )
+
+            if not needs_regen:
+                return cached_path
+
             new_qr_path = generate_qr_code(shop_slug, shop_name)
-            
-            # Update shopkeeper data
             self.shopkeeper_data['qr_code_path'] = new_qr_path
-            
-            # Update database
+
             try:
                 from shared.database import Shopkeeper
-                shopkeeper = self.db.query(Shopkeeper).filter(Shopkeeper.shop_id == shop_id).first()
-                if shopkeeper:
-                    shopkeeper.qr_code_path = new_qr_path
-                    self.db.commit()
-                    logger.info(f"Updated QR code path for shopkeeper {shop_id}")
+                if shop_id:
+                    shopkeeper = (
+                        self.db.query(Shopkeeper)
+                        .filter(Shopkeeper.shop_id == shop_id)
+                        .first()
+                    )
+                    if shopkeeper:
+                        shopkeeper.qr_code_path = new_qr_path
+                        self.db.commit()
+                        logger.info(
+                            "Updated QR code path for shopkeeper %s -> %s",
+                            shop_id, new_qr_path,
+                        )
             except Exception as e:
                 logger.warning(f"Could not update QR code path in database: {e}")
-            
+
             return new_qr_path
-            
+
         except Exception as e:
             logger.error(f"Error ensuring QR code exists: {e}")
             return None
