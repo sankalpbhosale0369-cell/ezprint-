@@ -8410,6 +8410,7 @@ class DashboardWindow(QMainWindow):
                         file_type=jd.get("file_type", "pdf"),
                         job_id=jid,
                         copies=jd.get("copies", 1),
+                        page_range=jd.get("page_range"),
                         page_size=jd.get("page_size", "A4"),
                         orientation=jd.get("orientation", "Portrait"),
                         print_side=jd.get("print_side", "Single"),

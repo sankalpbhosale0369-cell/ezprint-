@@ -70,6 +70,7 @@ class JobSummary(BaseModel):
     color_mode: str
     layout_pages: Optional[int] = None
     layout_type: Optional[str] = None
+    page_range: Optional[str] = None
     amount: Optional[float] = None
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None

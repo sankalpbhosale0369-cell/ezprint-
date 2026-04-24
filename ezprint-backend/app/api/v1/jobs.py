@@ -76,6 +76,7 @@ def _job_to_summary(job: models.PrintJob) -> JobSummary:
         color_mode=job.color_mode,
         layout_pages=job.layout_pages,
         layout_type=job.layout_type,
+        page_range=job.page_range,
         amount=job.amount,
         customer_name=job.customer_name,
         customer_phone=job.customer_phone,
