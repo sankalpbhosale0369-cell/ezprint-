@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -85,13 +86,48 @@ def classify_image(data: bytes) -> PageStats:
         return PageStats(total_pages=1, color_pages=0)
 
 
+def _estimate_docx_page_count(data: bytes) -> int:
+    """Rough page count for .docx (print-style estimate; matches browser slices ~OK)."""
+    try:
+        from docx import Document
+    except Exception as exc:
+        logger.info("python-docx unavailable: %s", exc)
+        return 1
+    try:
+        doc = Document(io.BytesIO(data))
+        words = 0
+        for p in doc.paragraphs:
+            t = p.text or ""
+            if t.strip():
+                words += len(re.findall(r"[\w']+", t))
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    t = cell.text or ""
+                    if t.strip():
+                        words += len(re.findall(r"[\w']+", t))
+    except Exception as exc:
+        logger.info("docx page estimate failed: %s", exc)
+        return 1
+    # ~250 words / A4 page (body text; aligns loosely with in-browser A4-height slices)
+    wpp = 250
+    return max(1, min(500, (max(words, 1) + wpp - 1) // wpp))
+
+
+def classify_docx(data: bytes) -> PageStats:
+    n = _estimate_docx_page_count(data)
+    return PageStats(total_pages=n, color_pages=0)
+
+
 def classify_bytes(file_type: str, data: bytes) -> PageStats:
     ft = (file_type or "").lower().lstrip(".")
     if ft == "pdf":
         return classify_pdf(data)
     if ft in {"jpg", "jpeg", "png", "bmp", "tiff", "webp", "gif"}:
         return classify_image(data)
-    # For docx/xlsx etc. we just stamp a single page and bill BW by default.
+    if ft == "docx":
+        return classify_docx(data)
+    # For xlsx / legacy .doc / etc. we just stamp a single page and bill BW by default.
     return PageStats(total_pages=1, color_pages=0)
 
 
@@ -197,4 +233,10 @@ def classify_bytes_for_job(file_type: str, data: bytes, page_range: str | None) 
     ft = (file_type or "").lower().lstrip(".")
     if ft == "pdf":
         return classify_pdf_for_page_range(data, page_range)
+    if ft == "docx":
+        n = _estimate_docx_page_count(data)
+        idx = parse_page_range_to_indices(page_range, n)
+        if not idx:
+            return PageStats(total_pages=1, color_pages=0)
+        return PageStats(total_pages=len(idx), color_pages=0)
     return classify_bytes(file_type, data)

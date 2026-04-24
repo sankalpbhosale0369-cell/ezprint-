@@ -12,6 +12,8 @@
     <script src="https://unpkg.com/cropperjs@1.5.13/dist/cropper.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+    <script src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
+    <script src="https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
     <script src="/static/js/fastapi-bridge.js"></script>
 </head>
 
@@ -318,7 +320,7 @@
                             </div>
                         </div>
                         <input type="file" id="file" name="file"
-                            accept=".pdf,.docx,.doc,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.bmp,.tiff" multiple required>
+                            accept=".pdf,.docx,.doc,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.bmp,.tiff,.webp" multiple required>
                     </div>
                     <div class="file-info" id="fileInfo"></div>
                 </div>

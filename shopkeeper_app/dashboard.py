@@ -2259,9 +2259,13 @@ class JobPopupDialog(QDialog):
             # 3. Defer cancellation logic to the NEXT event loop cycle
             # This prevents win32print blocking calls from executing inside the dialog event loop
             if dash and hasattr(dash, 'cancel_job_by_id'):
-                QTimer.singleShot(0, lambda: dash.cancel_job_by_id(
-                    job_id, "Rejected by shop", ask=False
-                ))
+                # Default args bind now; avoids late-binding issues on the QTimer tick.
+                QTimer.singleShot(
+                    0,
+                    lambda j=job_id, d=dash: d.cancel_job_by_id(
+                        j, "Rejected by shop", ask=False
+                    ),
+                )
             
         except Exception as e:
             logger.error(f"Error in popup cancel button: {e}")
@@ -6366,6 +6370,12 @@ class DashboardWindow(QMainWindow):
         job = self.db.query(PrintJob).filter(PrintJob.job_id == job_id).first()
         if job:
             self.stop_job(job, ask=ask, cancel_detail=cancel_detail)
+        else:
+            logger.warning("cancel_job_by_id: no local PrintJob row for job_id=%s", job_id)
+            try:
+                self.show_toast("Could not find that job to cancel. Try refreshing the list.")
+            except Exception:
+                pass
 
     def open_job_by_id(self, job_id):
         job = self.db.query(PrintJob).filter(PrintJob.job_id == job_id).first()
@@ -10619,7 +10629,8 @@ class DashboardWindow(QMainWindow):
             if not db_job:
                 return
                 
-            if db_job.status in ["Completed", "Failed"]:
+            st_gate = (db_job.status or "").strip().lower()
+            if st_gate in ("completed", "failed", "cancelled", "canceled"):
                 self.show_toast(f"Action Invalid: Job is already {db_job.status}")
                 return
 
@@ -10633,15 +10644,32 @@ class DashboardWindow(QMainWindow):
                 )
                 if reply != QMessageBox.Yes:
                     return
-            
-            # FIX 3: Immediate soft-cancel for Pending jobs
-            if db_job.status in ['Pending', 'In Queue']:
-                self.report_job_status(job.job_id, 'Cancelled', 0, cancel_detail)
+
+            # Pre-print / queue states: must cancel without relying on the Windows
+            # spooler. The new-job popup shows Cancel for (among others) Processing,
+            # but the DB status is often "Processing" not "Pending" / "In Queue" —
+            # the old spooler-only path returned ok=False and reported "Stopping Failed"
+            # even though the job had never left our queue, so the button looked broken.
+            st_norm = (db_job.status or "").strip().lower()
+            is_queue_or_prep = st_norm in (
+                "pending",
+                "in queue",
+                "queued",
+                "processing",
+                "printing started",
+                "",  # treat unknown empty like pending
+            )
+            if is_queue_or_prep:
+                try:
+                    self.printer_manager.cancel_job(job.job_id)
+                except Exception as cancel_exc:
+                    logger.info("soft-cancel: printer_manager.cancel_job best-effort: %s", cancel_exc)
+                self.report_job_status(job.job_id, "Cancelled", 0, cancel_detail)
                 self.load_print_jobs()
                 self.show_toast("Job removed from queue.")
                 return
 
-            # Attempt to cancel via printer manager (returns success, message)
+            # Actually printing: stop via spooler / process (stricter than queue cancel)
             ok, message = self.printer_manager.cancel_job(job.job_id)
             
             # FIX 2: Removal of UI thread blocking (DO NOT WAIT)

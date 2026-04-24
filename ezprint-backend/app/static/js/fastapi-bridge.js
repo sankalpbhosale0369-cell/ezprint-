@@ -252,11 +252,232 @@
   }
 
   /**
-   * @param {object} opt
-   * @param {string} [opt.color_mode]  'Black & White' | 'Color'
-   * @param {string} [opt.orientation] 'Portrait' | 'Landscape'
-   * @param {number} [opt.layout_pages] 1,2,4,6,8,9,16
+   * One raster image (or unrecognised embed) → single-page A4 PDF bytes (for PDF.js preview).
+   * Mirrors the PRINT “combine images to PDF” layout in customer.js.
    */
+  async function __rasterFileToPdfBytes(file, signal) {
+    if (signal && signal.aborted) {
+      throw new global.DOMException('Aborted', 'AbortError');
+    }
+    if (!global.PDFLib || !global.PDFLib.PDFDocument) {
+      throw new Error('PDF library not loaded');
+    }
+    const { PDFDocument } = global.PDFLib;
+    const pdfDoc = await PDFDocument.create();
+    const imageBytes = await file.arrayBuffer();
+    if (signal && signal.aborted) {
+      throw new global.DOMException('Aborted', 'AbortError');
+    }
+    const u8 = new global.Uint8Array(imageBytes);
+    var pdfImage = null;
+    try {
+      pdfImage = await pdfDoc.embedJpg(u8);
+    } catch (e) {
+      pdfImage = null;
+    }
+    if (!pdfImage) {
+      try {
+        pdfImage = await pdfDoc.embedPng(u8);
+      } catch (e) {
+        pdfImage = null;
+      }
+    }
+    if (!pdfImage) {
+      var blob;
+      try {
+        blob = new global.Blob([u8], { type: file.type || 'image/png' });
+        var bitmap = await global.createImageBitmap(blob);
+        var c0 = global.document.createElement('canvas');
+        c0.width = bitmap.width;
+        c0.height = bitmap.height;
+        c0.getContext('2d').drawImage(bitmap, 0, 0);
+        bitmap.close && bitmap.close();
+        var pbin = c0.toDataURL('image/png');
+        pbin = pbin.indexOf(',') >= 0 ? pbin.split(',')[1] : pbin;
+        var raw = global.atob(pbin);
+        var pbuf = new global.Uint8Array(raw.length);
+        for (var i2 = 0; i2 < raw.length; i2++) pbuf[i2] = raw.charCodeAt(i2);
+        pdfImage = await pdfDoc.embedPng(pbuf);
+      } catch (e2) {
+        throw new Error('Unsupported or unreadable image for preview.');
+      }
+    }
+    const pageWidth = 595;
+    const pageHeight = 842;
+    const margin = 20;
+    const pdfPage = pdfDoc.addPage([pageWidth, pageHeight]);
+    const availableWidth = pageWidth - 2 * margin;
+    const availableHeight = pageHeight - 2 * margin;
+    const iw = pdfImage.width;
+    const ih = pdfImage.height;
+    const imgAspect = iw / ih;
+    const pageAspect = availableWidth / availableHeight;
+    var drawW;
+    var drawH;
+    if (imgAspect > pageAspect) {
+      drawW = availableWidth;
+      drawH = availableWidth / imgAspect;
+    } else {
+      drawH = availableHeight;
+      drawW = availableHeight * imgAspect;
+    }
+    const x0 = (pageWidth - drawW) / 2;
+    const y0 = (pageHeight - drawH) / 2;
+    pdfPage.drawImage(pdfImage, { x: x0, y: y0, width: drawW, height: drawH });
+    if (signal && signal.aborted) {
+      throw new global.DOMException('Aborted', 'AbortError');
+    }
+    return pdfDoc.save();
+  }
+
+  /**
+   * .docx → multi-page A4 PDF using mammoth (HTML) + html2canvas + pdf-lib.
+   */
+  async function __docxToPdfBytes(file, signal) {
+    if (signal && signal.aborted) {
+      throw new global.DOMException('Aborted', 'AbortError');
+    }
+    if (!global.mammoth) {
+      throw new Error('Word document preview (mammoth) not loaded');
+    }
+    if (!global.html2canvas) {
+      throw new Error('Document renderer (html2canvas) not loaded');
+    }
+    if (!global.PDFLib || !global.PDFLib.PDFDocument) {
+      throw new Error('PDF library not loaded');
+    }
+    const { PDFDocument } = global.PDFLib;
+    const buf = await file.arrayBuffer();
+    if (signal && signal.aborted) {
+      throw new global.DOMException('Aborted', 'AbortError');
+    }
+    const result = await global.mammoth.convertToHtml({ arrayBuffer: buf });
+    const html = (result && result.value) ? String(result.value) : '';
+    const wrap = global.document.createElement('div');
+    wrap.id = 'ezprint-docx-temp';
+    wrap.setAttribute('aria-hidden', 'true');
+    wrap.style.cssText = [
+      'position:fixed', 'left:-9999px', 'top:0', 'width:420px',
+      'background:#fff', 'color:#111', 'box-sizing:border-box',
+      'padding:16px', 'font:12px/1.4 system-ui,-apple-system,Segoe UI,sans-serif',
+      'word-wrap:break-word', 'overflow:visible', 'z-index:0',
+    ].join(';');
+    var style = global.document.createElement('style');
+    style.textContent = 'table{max-width:100%;border-collapse:collapse;} img{max-width:100%;} p{margin:0 0 0.5em 0}';
+    wrap.appendChild(style);
+    var body = global.document.createElement('div');
+    if (html) {
+      body.innerHTML = html;
+    } else {
+      body.textContent = ' ';
+    }
+    wrap.appendChild(body);
+    global.document.body.appendChild(wrap);
+    if (signal && signal.aborted) {
+      try {
+        global.document.body.removeChild(wrap);
+      } catch (e) {
+        /* ignore */
+      }
+      throw new global.DOMException('Aborted', 'AbortError');
+    }
+    var h2cOpts = {
+      backgroundColor: '#ffffff',
+      scale: 1,
+      useCORS: true,
+      allowTaint: true,
+    };
+    var big;
+    try {
+      big = await global.html2canvas(wrap, h2cOpts);
+    } finally {
+      try {
+        if (wrap.parentNode) {
+          global.document.body.removeChild(wrap);
+        }
+      } catch (e) {
+        /* ignore */
+      }
+    }
+    if (signal && signal.aborted) {
+      throw new global.DOMException('Aborted', 'AbortError');
+    }
+    if (!big || big.width < 1 || big.height < 1) {
+      const pdf0 = await PDFDocument.create();
+      pdf0.addPage([595, 842]);
+      return pdf0.save();
+    }
+    const sliceW = big.width;
+    const sliceH = Math.max(1, Math.round((sliceW * 297) / 210));
+    const pdfOut = await PDFDocument.create();
+    for (var y0 = 0, pi = 0; y0 < big.height; y0 += sliceH) {
+      if (pi > 200) {
+        break;
+      }
+      var hPart = global.Math.min(sliceH, big.height - y0);
+      var cPart = global.document.createElement('canvas');
+      cPart.width = sliceW;
+      cPart.height = hPart;
+      cPart.getContext('2d').drawImage(
+        big,
+        0,
+        y0,
+        sliceW,
+        hPart,
+        0,
+        0,
+        sliceW,
+        hPart
+      );
+      var pbytes = await new global.Promise(function (resolve) {
+        cPart.toBlob(
+          function (b) {
+            if (!b) {
+              resolve(new global.Uint8Array(0));
+              return;
+            }
+            b.arrayBuffer().then(function (ab) {
+              resolve(new global.Uint8Array(ab));
+            });
+          },
+          'image/png',
+          0.92
+        );
+      });
+      if (!pbytes || pbytes.length < 8) {
+        break;
+      }
+      var eimg;
+      try {
+        eimg = await pdfOut.embedPng(pbytes);
+      } catch (e) {
+        break;
+      }
+      const pageW = 595;
+      const pageH = 842;
+      const m = 20;
+      const aw = pageW - 2 * m;
+      const ah = pageH - 2 * m;
+      const s = global.Math.min(aw / eimg.width, ah / eimg.height);
+      const dw = eimg.width * s;
+      const dh = eimg.height * s;
+      const x = (pageW - dw) / 2;
+      const y = (pageH - dh) / 2;
+      const pgN = pdfOut.addPage([pageW, pageH]);
+      pgN.drawImage(eimg, { x: x, y: y, width: dw, height: dh });
+      pi++;
+    }
+    if (pi === 0) {
+      const pdf1 = await PDFDocument.create();
+      pdf1.addPage([595, 842]);
+      return pdf1.save();
+    }
+    if (signal && signal.aborted) {
+      throw new global.DOMException('Aborted', 'AbortError');
+    }
+    return pdfOut.save();
+  }
+
   async function __renderPdfToPreviews(pdfData, oneBasedIndices, opt) {
     if (!global.pdfjsLib) {
       throw new Error('PDF preview library not loaded');
@@ -301,8 +522,19 @@
       sctx.fillStyle = '#ffffff';
       sctx.fillRect(0, 0, sheet.width, sheet.height);
 
-      for (var k = 0; k < chunk.length; k++) {
-        var pnum = chunk[k];
+      // Single source page (e.g. one image, or page range selecting only one page):
+      // fill every cell of the N-up grid with repeats so the preview matches
+      // "2 per sheet" / "4 per sheet" etc. Multi-page jobs keep one PDF page per cell
+      // until a sheet is full; the last *partial* sheet must not repeat the last page.
+      var useRepeatFill =
+        layoutPages > 1 &&
+        chunk.length === 1 &&
+        sheetCapacity > 1 &&
+        indices.length === 1;
+      var drawCount = useRepeatFill ? sheetCapacity : chunk.length;
+
+      for (var k = 0; k < drawCount; k++) {
+        var pnum = useRepeatFill ? chunk[0] : chunk[k];
         var page = await pdf.getPage(pnum);
         var row = Math.floor(k / grid.cols);
         var col = k % grid.cols;
@@ -330,29 +562,28 @@
   global.__ezprintClientPrintPreview = async function (file, pageRangeVal, printSettings, signal) {
     if (signal && signal.aborted) throw new global.DOMException('Aborted', 'AbortError');
     const name = (file.name || '').toLowerCase();
-    const isImg = /\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
+    const isImg = /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(name) ||
+      ((file.type || '').toLowerCase().indexOf('image/') === 0 &&
+        !/\.(pdf|docx?)$/i.test(name));
+    const isDocx = /\.docx$/i.test(name);
     const ps = printSettings || {};
+
+    var uintData;
     if (isImg) {
-      const url = global.URL.createObjectURL(file);
-      return {
-        success: true,
-        previews: [url],
-        total_pages: 1,
-        total_document_pages: 1,
-        selected_document_pages: 1,
-        layout_pages: parseInt(String(ps.layout_pages), 10) || 1,
-        color_sheets: 0,
-        bw_sheets: 0,
-        total_amount: 0,
-        page_range_warning: null,
-      };
+      const ab0 = await __rasterFileToPdfBytes(file, signal);
+      uintData = new Uint8Array(ab0);
+    } else if (isDocx) {
+      const ab1 = await __docxToPdfBytes(file, signal);
+      uintData = new Uint8Array(ab1);
+    } else {
+      const buf = await file.arrayBuffer();
+      if (signal && signal.aborted) throw new global.DOMException('Aborted', 'AbortError');
+      uintData = new Uint8Array(buf);
     }
-    const buf = await file.arrayBuffer();
     if (signal && signal.aborted) throw new global.DOMException('Aborted', 'AbortError');
     if (!global.pdfjsLib) {
-      throw new Error('PDF.js not loaded; cannot preview PDFs in the browser.');
+      throw new Error('PDF.js not loaded; cannot preview in the browser.');
     }
-    const uintData = new Uint8Array(buf);
     var pdfDoc;
     try {
       pdfDoc = await __getPdfDocument(uintData);
@@ -388,12 +619,17 @@
     };
   };
 
-  /** XEROX: scanned images combined to PDF; match old Flask /api/preview shape. */
-  global.__ezprintClientXeroxPreview = async function (pdfFile, pageRangeStr, signal) {
+  /**
+   * XEROX: scanned images combined to PDF.
+   * Optional `printSettings` matches PRINT preview (layout, orientation, B/W).
+   * @param {object} [printSettings] e.g. { color_mode, orientation, layout_pages }
+   */
+  global.__ezprintClientXeroxPreview = async function (pdfFile, pageRangeStr, signal, printSettings) {
     if (signal && signal.aborted) throw new global.DOMException('Aborted', 'AbortError');
     if (!global.pdfjsLib) {
       throw new Error('PDF.js not loaded');
     }
+    const ps = printSettings || {};
     const buf = await pdfFile.arrayBuffer();
     const uintData = new Uint8Array(buf);
     let pdf;
@@ -405,11 +641,25 @@
         ? 'Invalid PDF structure.'
         : xmsg);
     }
-    const idx = __parsePageIndices(pageRangeStr, pdf.numPages);
-    const rendered = await __renderPdfToPreviews(pdf, idx, {});
+    const docPageCount = pdf.numPages;
+    const idx = __parsePageIndices(pageRangeStr, docPageCount);
+    const layoutN = Math.max(1, parseInt(String(ps.layout_pages || 1), 10) || 1);
+    const grid0 = __layoutGrid(layoutN);
+    const cap = grid0.rows * grid0.cols;
+    const billableSheets = idx.length === 0 ? 0 : Math.ceil(idx.length / cap);
+    const renderOpts = {
+      color_mode: ps.color_mode,
+      orientation: ps.orientation,
+      layout_pages: layoutN,
+    };
+    const rendered = await __renderPdfToPreviews(pdf, idx, renderOpts);
     return {
       success: true,
       previews: rendered.previews,
+      total_pages: billableSheets < 1 ? 1 : billableSheets,
+      total_document_pages: docPageCount,
+      selected_document_pages: idx.length,
+      layout_pages: layoutN,
       total_amount: 0,
       color_sheets: 0,
       bw_sheets: 0,

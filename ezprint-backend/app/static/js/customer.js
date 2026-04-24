@@ -240,7 +240,7 @@ document.addEventListener('DOMContentLoaded', function () {
         // Check if all files are images
         const imageFiles = files.filter(f =>
             f.type.startsWith('image/') ||
-            /\.(png|jpe?g|gif|bmp|tiff)$/i.test(f.name)
+            /\.(png|jpe?g|gif|bmp|tiff?|webp)$/i.test(f.name)
         );
 
         // If multiple images, combine into PDF
@@ -1273,7 +1273,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 const data = await __ezprintClientXeroxPreview(
                     pdfFile,
                     opts.page_range,
-                    xeroxPreviewAbortController.signal
+                    xeroxPreviewAbortController.signal,
+                    {
+                        color_mode: opts.color_mode,
+                        orientation: opts.orientation,
+                        layout_pages: parseInt(String(opts.layout_pages), 10) || 1,
+                    }
                 );
 
                 // Check if request was aborted
@@ -1293,7 +1298,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     backendBWSheets = data.bw_sheets;
 
                     previewUrls = data.previews;
-                    totalPages = previewUrls.length;
+                    totalPages = (data.total_pages != null && data.total_pages > 0)
+                        ? data.total_pages
+                        : previewUrls.length;
 
                     // Keep current page index if still valid, otherwise reset to 0
                     if (currentPageIndex >= totalPages) {
