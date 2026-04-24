@@ -67,6 +67,7 @@ async def _handle_heartbeat(tenant_id: str, data: dict) -> None:
 
 
 _WS_STATUS_MAP = {
+    "processing_started": "Processing",
     "print_started": "Printing",
     "print_completed": "Completed",
     "print_failed": "Failed",
@@ -179,7 +180,12 @@ async def agent_socket(websocket: WebSocket, token: Optional[str] = Query(defaul
                 )
             elif kind == "printer_heartbeat":
                 await _handle_heartbeat(tenant_id, data)
-            elif kind in {"print_started", "print_completed", "print_failed"}:
+            elif kind in {
+                "processing_started",
+                "print_started",
+                "print_completed",
+                "print_failed",
+            }:
                 await _handle_print_status(tenant_id, kind, data)
             else:
                 logger.debug("agent message ignored kind=%s tenant=%s", kind, tenant_id)

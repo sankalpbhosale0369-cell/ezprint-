@@ -196,7 +196,9 @@ class PrinterManager:
         ws_sent = False
         if self.ws_client is not None and self._ws_is_connected():
             try:
-                if normalized == "printing":
+                if normalized == "processing":
+                    ws_sent = self.ws_client.report_processing_started(job_id)
+                elif normalized == "printing":
                     ws_sent = self.ws_client.report_print_started(job_id)
                 elif normalized == "completed":
                     ws_sent = self.ws_client.report_print_completed(job_id)
@@ -211,6 +213,7 @@ class PrinterManager:
 
         if self.api_client is not None:
             target = {
+                "processing": "Processing",
                 "printing": "Printing",
                 "completed": "Completed",
                 "failed": "Failed",
@@ -1446,6 +1449,13 @@ class PrinterManager:
                     def _emit(status, progress, details):
                         if self._job_poll_generation.get(job_id) != gen:
                             return
+                        if status == "Failed" and job_id in self._sumatra_ok_jobs:
+                            logger.info(
+                                "Ignoring spooler Failed for job %s; print pipeline already succeeded",
+                                job_id,
+                            )
+                            self._sumatra_ok_jobs.discard(job_id)
+                            status, progress, details = "Completed", 100, details or "Printed successfully"
                         try:
                             callback(job_id, status, progress, details)
                         except Exception:

@@ -1813,10 +1813,15 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!jobDetailsStatus) return;
         const status = (statusText || '').toString().trim() || '-';
         jobDetailsStatus.textContent = status;
-        jobDetailsStatus.classList.remove('is-pending', 'is-queue', 'is-printing', 'is-completed', 'is-failed');
+        jobDetailsStatus.classList.remove(
+            'is-pending', 'is-queue', 'is-processing', 'is-printing', 'is-completed', 'is-failed', 'is-cancelled'
+        );
         const s = status.toLowerCase();
         if (s.includes('failed')) jobDetailsStatus.classList.add('is-failed');
+        else if (s === 'rejected' || s.includes('rejected')) jobDetailsStatus.classList.add('is-failed');
+        else if (s === 'cancelled' || s.includes('cancelled')) jobDetailsStatus.classList.add('is-cancelled');
         else if (s.includes('completed')) jobDetailsStatus.classList.add('is-completed');
+        else if (s.includes('processing')) jobDetailsStatus.classList.add('is-processing');
         else if (s.includes('printing')) jobDetailsStatus.classList.add('is-printing');
         else if (s.includes('queue')) jobDetailsStatus.classList.add('is-queue');
         else jobDetailsStatus.classList.add('is-pending');
@@ -1952,12 +1957,17 @@ document.addEventListener('DOMContentLoaded', function () {
         updateJobDetailsStatus('Pending');
     }
 
-    function mapApiJobStatusForUi(s) {
+    function mapApiJobStatusForUi(s, errMsg) {
         if (!s) return 'Pending';
         if (s === 'AwaitingUpload' || s === 'Queued') return 'In Queue';
+        if (s === 'Processing') return 'Processing';
         if (s === 'Printing') return 'Printing';
         if (s === 'Completed') return 'Completed';
-        if (s === 'Failed' || s === 'Cancelled') return 'Failed';
+        if (s === 'Failed') return 'Failed';
+        if (s === 'Cancelled') {
+            if (errMsg && String(errMsg).indexOf('Rejected by shop') === 0) return 'Rejected';
+            return 'Cancelled';
+        }
         return s;
     }
 
@@ -1966,17 +1976,26 @@ document.addEventListener('DOMContentLoaded', function () {
         __ezprintFetchJob(currentJobId)
             .then((data) => {
                 if (!data || !data.status) return;
-                const status = mapApiJobStatusForUi(data.status);
+                const err = data.error_message || data.errorMessage || '';
+                const status = mapApiJobStatusForUi(data.status, err);
                 renderSingleStepper(status);
                 updateProgressBar(status, null);
                 // Use backend-calculated amount once it's available (overrides local estimate)
                 if (data.amount != null && jobDetailsAmount) {
                     jobDetailsAmount.textContent = '₹' + Number(data.amount).toFixed(2);
                 }
-                if (data.status === 'Failed' || data.status === 'Cancelled') {
+                if (data.status === 'Failed') {
                     singleJobError.textContent = 'This job could not be completed. Please ask the shop for help.';
                     singleJobError.style.display = 'block';
                     if (singleJobProgress) singleJobProgress.style.width = '100%';
+                } else if (data.status === 'Cancelled') {
+                    singleJobError.textContent = err && String(err).indexOf('Rejected by shop') === 0
+                        ? 'This job was rejected by the shop.'
+                        : (err || 'This job was cancelled.');
+                    singleJobError.style.display = 'block';
+                    if (singleJobProgress) singleJobProgress.style.width = '100%';
+                } else {
+                    singleJobError.style.display = 'none';
                 }
                 if (data.status === 'Completed' || data.status === 'Failed' || data.status === 'Cancelled') {
                     clearInterval(statusCheckInterval);
@@ -1987,85 +2006,84 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function renderSingleStepper(status) {
-        // Redesigned Stepper to match reference:
-        // Steps: In Queue, Printing, Ready for Pickup
-        // Icons: SVGs for professional SaaS look
-
         const iconQueue = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>`;
+        const iconProcess = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path></svg>`;
         const iconPrint = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>`;
         const iconCheck = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`;
+        const iconFail = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>`;
 
         const steps = [
-            {
-                title: 'In Queue',
-                icon: iconQueue,
-                desc: 'This step has been completed.',
-                activeDesc: 'Your document is waiting in the queue.'
-            },
-            {
-                title: 'Printing',
-                icon: iconPrint,
-                desc: 'This step has been completed.',
-                activeDesc: 'Your document is currently printing.'
-            },
-            {
-                title: 'Ready for Pickup',
-                icon: iconCheck,
-                desc: 'Your document is ready for pickup.<br>Show your Job ID at the counter.',
-                activeDesc: 'Your document is ready for pickup.<br>Show your Job ID at the counter.'
-            }
+            { title: 'In Queue', icon: iconQueue, desc: 'Queue step completed.', activeDesc: 'Your document is waiting in the queue.' },
+            { title: 'Processing', icon: iconProcess, desc: 'Processing step completed.', activeDesc: 'The shop is preparing your document.' },
+            { title: 'Printing', icon: iconPrint, desc: 'Printing step completed.', activeDesc: 'Your document is printing.' },
+            { title: 'Ready for Pickup', icon: iconCheck, desc: 'Your document is ready for pickup.<br>Show your Job ID at the counter.', activeDesc: 'Your document is ready for pickup.<br>Show your Job ID at the counter.' }
         ];
 
         let normalizedStatus = status;
-        if (status === 'Printing Completed' || status.includes('Completed')) {
+        if (status === 'Printing Completed' || (status && status.includes('Completed'))) {
             normalizedStatus = 'Completed';
         }
 
-        // Map status to step index
         let activeIdx = 0;
-        if (normalizedStatus === 'Completed') {
-            activeIdx = 2; // Ready for Pickup
-        } else if (normalizedStatus === 'Printing Started' || normalizedStatus.includes('Printing')) {
-            activeIdx = 1; // Printing
+        let failedAt = -1;
+        let cancelledAt = -1;
+        if (normalizedStatus === 'Failed') {
+            activeIdx = 2;
+            failedAt = 2;
+        } else if (normalizedStatus === 'Cancelled' || normalizedStatus === 'Rejected') {
+            activeIdx = 1;
+            cancelledAt = 1;
+        } else if (normalizedStatus === 'Completed') {
+            activeIdx = 3;
+        } else if (normalizedStatus === 'Printing' || (status && status.includes('Printing') && normalizedStatus !== 'Failed')) {
+            activeIdx = 2;
+        } else if (normalizedStatus === 'Processing') {
+            activeIdx = 1;
         } else {
-            activeIdx = 0; // In Queue (covers Pending too)
+            activeIdx = 0;
         }
 
-        // Update Job ID Timestamp if not set (Mocking the timestamp for SaaS feel if data missing)
         const timeEl = document.getElementById('jobEstimatedTime');
         if (timeEl && timeEl.style.display === 'none') {
-            const now = new Date();
-            timeEl.textContent = formatUniformDateTime(now);
+            timeEl.textContent = formatUniformDateTime(new Date());
             timeEl.style.display = 'block';
         }
 
-        const html = steps.map((s, i) => {
+        const html = steps.map(function (s, i) {
             let cls = 'timeline-step';
             let iconContent = s.icon;
-            let descContent = s.activeDesc; // Default description
+            let descContent = s.activeDesc;
+            let title = s.title;
 
-            if (i < activeIdx) {
-                // Completed steps
+            if (failedAt === i) {
+                cls += ' current failed';
+                iconContent = iconFail;
+                title = 'Failed';
+                descContent = 'Printing could not be completed. Check with the shop.';
+            } else if (cancelledAt === i) {
+                cls += ' current cancelled';
+                descContent = normalizedStatus === 'Rejected'
+                    ? 'The shop rejected this job.'
+                    : 'This job was cancelled.';
+            } else if (i < activeIdx) {
                 cls += ' completed';
                 descContent = s.desc;
             } else if (i === activeIdx) {
-                // Current step
                 cls += ' current';
             } else {
-                // Future steps
                 cls += ' pending';
-                descContent = ''; // No description for future steps
+                descContent = '';
             }
 
-            return `
-            <div class="${cls}">
-                <div class="step-line"></div>
-                <div class="step-icon">${iconContent}</div>
-                <div class="step-content">
-                    <div class="step-title">${s.title}</div>
-                    <div class="step-desc">${descContent}</div>
-                </div>
-            </div>`;
+            return (
+                '<div class="' + cls + '">' +
+                '<div class="step-line"></div>' +
+                '<div class="step-icon">' + iconContent + '</div>' +
+                '<div class="step-content">' +
+                '<div class="step-title">' + title + '</div>' +
+                '<div class="step-desc">' + descContent + '</div>' +
+                '</div></div>'
+            );
         }).join('');
 
         singleJobStepper.innerHTML = html;
@@ -2094,23 +2112,27 @@ document.addEventListener('DOMContentLoaded', function () {
         } else {
             // Fallback to status-based progress
             if (normalizedStatus === 'Pending') pct = 10;
-            else if (normalizedStatus === 'In Queue') pct = 30;
+            else if (normalizedStatus === 'In Queue') pct = 25;
+            else if (normalizedStatus === 'Processing') pct = 45;
             else if (normalizedStatus === 'Printing Started' || normalizedStatus === 'Printing') pct = 70;
             else if (normalizedStatus === 'Completed') pct = 100;
-            else if (normalizedStatus === 'Failed') pct = 100;
+            else if (normalizedStatus === 'Failed' || normalizedStatus === 'Cancelled' || normalizedStatus === 'Rejected') pct = 100;
         }
 
         singleJobProgress.style.width = pct + '%';
         const text = document.getElementById('singleJobProgressText');
         if (text) text.textContent = pct + '%';
 
-        // Update progress bar color based on normalized status
         if (normalizedStatus === 'Failed') {
             singleJobProgress.style.backgroundColor = '#f44336';
         } else if (normalizedStatus === 'Completed') {
             singleJobProgress.style.backgroundColor = '#4caf50';
+        } else if (normalizedStatus === 'Cancelled' || normalizedStatus === 'Rejected') {
+            singleJobProgress.style.backgroundColor = '#9ca3af';
         } else if (normalizedStatus === 'Printing' || normalizedStatus === 'Printing Started') {
             singleJobProgress.style.backgroundColor = '#2196f3';
+        } else if (normalizedStatus === 'Processing') {
+            singleJobProgress.style.backgroundColor = '#6366f1';
         } else {
             singleJobProgress.style.backgroundColor = '#ff9800';
         }

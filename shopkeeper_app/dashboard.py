@@ -1717,7 +1717,18 @@ class JobPopupDialog(QDialog):
         self._printer_status_timer = QTimer(self)
         self._printer_status_timer.timeout.connect(self._refresh_printer_status)
         self._printer_status_timer.start(2000) # 2 seconds
-        
+
+        QTimer.singleShot(0, self._notify_backend_processing_started)
+
+    def _notify_backend_processing_started(self):
+        pm = getattr(self.dashboard, "printer_manager", None)
+        jid = getattr(self.job, "job_id", None)
+        if pm and jid:
+            try:
+                pm.report_job_status(jid, "processing")
+            except Exception as exc:
+                logger.debug("notify processing_started failed: %s", exc)
+
     def center_on_screen(self):
         screen = self.screen().availableGeometry()
         x = screen.x() + (screen.width() - self.width()) // 2
@@ -1998,38 +2009,36 @@ class JobPopupDialog(QDialog):
         
         # Mode-aware button detection (before creating buttons)
         is_auto = hasattr(self.dashboard, 'auto_mode') and self.dashboard.auto_mode
-        
-        # Cancel Button (Manual Mode Only)
-        if not is_auto:
-            self.cancel_btn = QPushButton("Cancel")
-            self.cancel_btn.setFixedSize(90, 28)
-            self.cancel_btn.setCursor(Qt.PointingHandCursor)
-            self.cancel_btn.setStyleSheet("""
-                QPushButton {
-                    min-width: 90px;
-                    max-width: 90px;
-                    min-height: 28px;
-                    max-height: 28px;
-                    padding: 4px 8px;
-                    border-radius: 5px;
-                    font-size: 9px;
-                    font-weight: 600;
-                    text-align: center;
-                    background-color: #dc2626;
-                    color: #ffffff;
-                    border: 1px solid #b91c1c;
-                }
-                QPushButton:hover {
-                    background-color: #b91c1c;
-                    border-color: #991b1b;
-                }
-                QPushButton:disabled {
-                    background-color: #9ca3af;
-                    color: #ffffff;
-                    border: 1px solid #6b7280;
-                }
-            """)
-            self.cancel_btn.clicked.connect(self.on_cancel_clicked)
+
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setFixedSize(90, 28)
+        self.cancel_btn.setCursor(Qt.PointingHandCursor)
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                min-width: 90px;
+                max-width: 90px;
+                min-height: 28px;
+                max-height: 28px;
+                padding: 4px 8px;
+                border-radius: 5px;
+                font-size: 9px;
+                font-weight: 600;
+                text-align: center;
+                background-color: #dc2626;
+                color: #ffffff;
+                border: 1px solid #b91c1c;
+            }
+            QPushButton:hover {
+                background-color: #b91c1c;
+                border-color: #991b1b;
+            }
+            QPushButton:disabled {
+                background-color: #9ca3af;
+                color: #ffffff;
+                border: 1px solid #6b7280;
+            }
+        """)
+        self.cancel_btn.clicked.connect(self.on_cancel_clicked)
         
         # Print Button
         self.print_btn = QPushButton("Print")
@@ -2062,15 +2071,14 @@ class JobPopupDialog(QDialog):
         """)
         self.print_btn.clicked.connect(self.on_print_clicked)
         
-        # Layout: [Cancel] [Print] in Manual Mode, or just [Print] in Auto Mode
+        # Layout: [Cancel] [Print] in all modes
         layout.addStretch()
 
         footer_layout = QHBoxLayout()
         footer_layout.addStretch()
 
-        if not is_auto:
-            footer_layout.addWidget(self.cancel_btn)
-            footer_layout.addSpacing(12)
+        footer_layout.addWidget(self.cancel_btn)
+        footer_layout.addSpacing(12)
 
         footer_layout.addWidget(self.print_btn)
         footer_layout.addStretch()
@@ -2144,15 +2152,11 @@ class JobPopupDialog(QDialog):
         self.update_status_style(self.status_val.text())
 
     def _update_cancel_visibility(self, status):
-        """Helper to control Cancel button visibility based on status and mode"""
+        """Show Cancel while the job can still be rejected before/during prep (not terminal)."""
         if not hasattr(self, 'cancel_btn') or sip.isdeleted(self.cancel_btn):
             return
-            
-        is_auto = hasattr(self.dashboard, 'auto_mode') and self.dashboard.auto_mode
         s = (status or "").lower()
-        
-        # Cancel button visible ONLY in Manual Mode AND Pending state
-        if not is_auto and s == "pending":
+        if s in ("pending", "in queue", "queued", "processing", ""):
             self.cancel_btn.show()
         else:
             self.cancel_btn.hide()
@@ -2255,7 +2259,9 @@ class JobPopupDialog(QDialog):
             # 3. Defer cancellation logic to the NEXT event loop cycle
             # This prevents win32print blocking calls from executing inside the dialog event loop
             if dash and hasattr(dash, 'cancel_job_by_id'):
-                QTimer.singleShot(0, lambda: dash.cancel_job_by_id(job_id))
+                QTimer.singleShot(0, lambda: dash.cancel_job_by_id(
+                    job_id, "Rejected by shop", ask=False
+                ))
             
         except Exception as e:
             logger.error(f"Error in popup cancel button: {e}")
@@ -2941,26 +2947,6 @@ class DashboardWindow(QMainWindow):
         except Exception as e:
             self.db.rollback()
             logger.error(f"Startup job recovery failed: {e}")
-
-    def bulk_delete_jobs(self, job_ids):
-        """Legacy bulk-delete. Asset cleanup is now owned by the backend's
-        job state machine (see ezprint-backend/app/workers/cleanup.py); the
-        agent only clears local rows so the dashboard doesn't drift."""
-        def delete_operation():
-            deleted_count = 0
-            for job_id in job_ids:
-                job = self.db.query(PrintJob).filter_by(job_id=job_id).first()
-                if job:
-                    self.db.delete(job)
-                    deleted_count += 1
-            return deleted_count
-
-        count = self.safe_db_operation(delete_operation)
-        if count:
-            QMessageBox.information(self, "Success", f"Deleted {count} job(s)")
-            self.load_print_jobs()
-
-        return count
 
     def _api_job_to_obj(self, job_dict):
         """Convert API job dictionary to an object-like structure for backward compatibility"""
@@ -5896,10 +5882,13 @@ class DashboardWindow(QMainWindow):
         self.btn_cancel_bulk.clicked.connect(self.bulk_cancel_jobs)
         sel_layout.addWidget(self.btn_cancel_bulk)
 
-        # Bulk-delete of Cloudinary assets is now owned by the backend state
-        # machine (see `app/services/jobs.py`); clients no longer own cleanup.
         self.btn_delete_bulk = QToolButton()
-        self.btn_delete_bulk.setVisible(False)
+        self.btn_delete_bulk.setToolTip("Remove selected jobs from this list (local only)")
+        self.btn_delete_bulk.setText("Delete")
+        self.btn_delete_bulk.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.btn_delete_bulk.setStyleSheet(btn_style)
+        self.btn_delete_bulk.clicked.connect(self.bulk_delete_jobs)
+        sel_layout.addWidget(self.btn_delete_bulk)
 
         self.btn_exit_select = QPushButton("Exit")
         self.btn_exit_select.setStyleSheet(btn_style)
@@ -6373,9 +6362,10 @@ class DashboardWindow(QMainWindow):
         job = self.db.query(PrintJob).filter(PrintJob.job_id == job_id).first()
         if job: self.print_job(job)
 
-    def cancel_job_by_id(self, job_id):
+    def cancel_job_by_id(self, job_id, cancel_detail="Requested by user", ask=True):
         job = self.db.query(PrintJob).filter(PrintJob.job_id == job_id).first()
-        if job: self.stop_job(job)
+        if job:
+            self.stop_job(job, ask=ask, cancel_detail=cancel_detail)
 
     def open_job_by_id(self, job_id):
         job = self.db.query(PrintJob).filter(PrintJob.job_id == job_id).first()
@@ -6428,7 +6418,9 @@ class DashboardWindow(QMainWindow):
 
     def _download_and_open_job(self, job):
         """Download the job file via presigned URL to a temp dir, then open it
-        with the system viewer.  Falls back to the local ``file_path`` cache."""
+        with the system viewer.  Falls back to the local ``file_path`` cache.
+        If ``page_range`` is set, opens a print-ready PDF containing only those
+        pages (same as Preview / final print), not the full document."""
         import tempfile
         job_id = getattr(job, 'job_id', None)
         api_client = getattr(self, 'api_client', None)
@@ -6454,10 +6446,31 @@ class DashboardWindow(QMainWindow):
         if not local_path and job and getattr(job, 'file_path', None) and os.path.exists(job.file_path):
             local_path = job.file_path
 
-        if local_path:
-            self._open_local_file(local_path)
-        else:
+        if not local_path:
             self.show_toast("File not available")
+            return
+
+        pr = (getattr(job, 'page_range', None) or '').strip()
+        ft = (getattr(job, 'file_type', None) or 'pdf').lower().lstrip('.')
+
+        if pr and ft == 'pdf':
+            try:
+                from shared.file_processor import generate_final_print_pdf
+                out = generate_final_print_pdf(
+                    file_path=local_path,
+                    file_type='pdf',
+                    page_size=getattr(job, 'page_size', None) or 'A4',
+                    orientation=getattr(job, 'orientation', None) or 'Portrait',
+                    layout_pages=max(1, int(getattr(job, 'layout_pages', None) or 1)),
+                    color_mode=getattr(job, 'color_mode', None) or 'Color',
+                    page_range=pr,
+                )
+                if out and os.path.exists(out) and out != local_path:
+                    local_path = out
+            except Exception as e:
+                logger.warning("open job: could not apply page_range preview (%s)", e)
+
+        self._open_local_file(local_path)
 
     def _open_job_file(self, job):
         try:
@@ -8718,6 +8731,7 @@ class DashboardWindow(QMainWindow):
                         file_type=job_data.get('file_type', 'pdf'),
                         job_id=job_id,
                         copies=job_data.get('copies', 1),
+                        page_range=job_data.get('page_range'),
                         page_size=job_data.get('page_size', 'A4'),
                         orientation=job_data.get('orientation', 'Portrait'),
                         print_side=job_data.get('print_side', 'Single'),
@@ -8732,7 +8746,21 @@ class DashboardWindow(QMainWindow):
                     self.db.commit()
                     logger.info(f"Inserted backend job {job_id} into local cache")
                 else:
-                    logger.debug(f"Job {job_id} already in local cache, skipping insert")
+                    # Keep settings in sync (e.g. page_range) if the row predates a fuller payload.
+                    try:
+                        if job_data.get('page_range') is not None:
+                            existing.page_range = job_data.get('page_range')
+                        if job_data.get('total_pages') is not None:
+                            existing.total_pages = job_data.get('total_pages')
+                        if job_data.get('amount') is not None:
+                            existing.amount = job_data.get('amount')
+                        if job_data.get('layout_pages') is not None:
+                            existing.layout_pages = job_data.get('layout_pages')
+                        self.db.commit()
+                    except Exception as merge_err:
+                        self.db.rollback()
+                        logger.debug("merge new_job into existing job row: %s", merge_err)
+                    logger.debug(f"Job {job_id} already in local cache, updated fields if provided")
             except Exception as e:
                 self.db.rollback()
                 logger.error(f"Failed to upsert backend job {job_id} into local DB: {e}")
@@ -9979,23 +10007,33 @@ class DashboardWindow(QMainWindow):
             self.exit_selection_mode()
 
     def bulk_delete_jobs(self):
-        """Delete all selected jobs"""
+        """Delete all selected jobs from the local shop queue (SQLite)."""
         if not self.selected_job_ids:
+            self.show_toast("No jobs selected")
             return
-        
-        # Safe extraction
+
+        shop_id = self.shopkeeper_data.get('shop_id', '')
         jobs_to_delete = []
         for jid in self.selected_job_ids:
-            if jid not in self.job_cards_map:
-                continue
-            item = self.job_cards_map[jid]
-            job = item.get("job")
+            job = None
+            if jid in self.job_cards_map:
+                job = self.job_cards_map[jid].get("job")
+            if job is None and shop_id:
+                job = self.db.query(PrintJob).filter(
+                    PrintJob.job_id == jid,
+                    PrintJob.shop_id == shop_id,
+                ).first()
             if job:
                 jobs_to_delete.append(job)
-        
+
+        if not jobs_to_delete:
+            self.show_toast("No matching jobs to delete")
+            return
+
         reply = QMessageBox.question(
             self, "Bulk Delete", 
-            f"Are you sure you want to delete {len(jobs_to_delete)} selected jobs?\nThis cannot be undone.",
+            f"Are you sure you want to delete {len(jobs_to_delete)} selected job(s) from this list?\n"
+            f"This only removes them on this computer (the server job is unchanged).",
             QMessageBox.Yes | QMessageBox.No
         )
         
@@ -10004,11 +10042,23 @@ class DashboardWindow(QMainWindow):
                 # Direct deletion logic to avoid multiple confirmation dialogs
                 try:
                     logger.info(f"[DEBUG_BULK_DELETE] Before delete: {job.job_id}")
+                    if job.job_id in getattr(self, "print_workers", {}):
+                        try:
+                            w = self.print_workers[job.job_id]
+                            w.quit()
+                            w.wait(3000)
+                        except Exception:
+                            pass
+                        self.print_workers.pop(job.job_id, None)
                     # FIX 1: Attach Job to Active Session Before Delete
                     job = self.db.merge(job)
-                    # Clean up file
-                    if os.path.exists(job.file_path):
-                        os.remove(job.file_path)
+                    # Clean up local file if present
+                    fp = job.file_path
+                    if fp and not str(fp).startswith(("http://", "https://")) and os.path.exists(fp):
+                        try:
+                            os.remove(fp)
+                        except OSError as rm_err:
+                            logger.warning("Could not remove file %s: %s", fp, rm_err)
                     # Remove from database
                     self.db.delete(job)
                 except Exception as e:
@@ -10158,12 +10208,16 @@ class DashboardWindow(QMainWindow):
             # Intermediate local statuses (In Queue, Offline, Paper Out, etc.)
             # are UI-only and would get a 409 from the backend.
             normalized = (status or "").lower()
-            _BACKEND_STATUSES = {"printing", "printing started", "completed", "failed"}
+            _WS_STATUSES = {
+                "processing", "printing", "printing started", "completed", "failed"
+            }
             ws_success = False
-            if normalized in _BACKEND_STATUSES:
+            if normalized in _WS_STATUSES:
                 if self.websocket_client and self.websocket_client.is_connected():
                     try:
-                        if normalized in ("printing", "printing started"):
+                        if normalized == "processing":
+                            ws_success = self.websocket_client.report_processing_started(job_id)
+                        elif normalized in ("printing", "printing started"):
                             ws_success = self.websocket_client.report_print_started(job_id)
                         elif normalized == "completed":
                             ws_success = self.websocket_client.report_print_completed(job_id)
@@ -10172,13 +10226,19 @@ class DashboardWindow(QMainWindow):
                     except Exception:
                         logger.exception("WS report_job_status failed job=%s status=%s", job_id, status)
 
-                # REST fallback via printer_manager when WS didn't send
                 if not ws_success and hasattr(self, 'printer_manager') and self.printer_manager.api_client:
                     self.printer_manager.report_job_status(
                         job_id, status,
                         error_message=details if normalized == "failed" else None,
                         printer_name=printer_name,
                     )
+            if normalized in ("cancelled", "canceled") and hasattr(self, 'api_client') and self.api_client:
+                try:
+                    self.api_client.update_job_status(
+                        job_id, "Cancelled", error_message=details or None
+                    )
+                except Exception:
+                    logger.exception("REST cancel failed job=%s", job_id)
             
             # DB write is deferred to update_job_status_in_ui() on the main thread
             # via thread_safe_signal to avoid SQLite threading races.
@@ -10545,7 +10605,7 @@ class DashboardWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error destroying window: {e}")    
 
-    def stop_job(self, job, ask=True):
+    def stop_job(self, job, ask=True, cancel_detail="Requested by user"):
         """Stop a queued/printing job (Hardened - FIX 1-5)"""
         if ask:
             self._cancel_dialog_active = True
@@ -10576,7 +10636,7 @@ class DashboardWindow(QMainWindow):
             
             # FIX 3: Immediate soft-cancel for Pending jobs
             if db_job.status in ['Pending', 'In Queue']:
-                self.report_job_status(job.job_id, 'Cancelled', 0, "Requested by user")
+                self.report_job_status(job.job_id, 'Cancelled', 0, cancel_detail)
                 self.load_print_jobs()
                 self.show_toast("Job removed from queue.")
                 return
@@ -10596,7 +10656,7 @@ class DashboardWindow(QMainWindow):
 
             if ok:
                 # Hardware stop confirmed (or best effort succeeded)
-                self.report_job_status(job.job_id, 'Cancelled', 0, "Requested by user")
+                self.report_job_status(job.job_id, 'Cancelled', 0, cancel_detail)
                 self.load_print_jobs()
                 if ask:
                     QMessageBox.information(self, "Stopped", f"Job stopped successfully.\n\n{message}")

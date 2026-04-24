@@ -31,7 +31,7 @@ from app.schemas.jobs import (
     JobSummary,
 )
 from app.services.billing import JobBillingInputs, PricingRates, calculate_amount
-from app.services.file_processor import classify_bytes
+from app.services.file_processor import classify_bytes_for_job
 from app.services.jobs import transition
 from app.services.notifier import notifier
 from app.services.storage import storage
@@ -83,6 +83,7 @@ def _job_to_summary(job: models.PrintJob) -> JobSummary:
         created_at=job.created_at,
         started_at=job.started_at,
         completed_at=job.completed_at,
+        error_message=job.error_message,
     )
 
 
@@ -182,7 +183,7 @@ async def finalize_job(
             detail=f"Upload not found in storage: {exc}",
         )
 
-    stats = classify_bytes(job.file_type, data)
+    stats = classify_bytes_for_job(job.file_type, data, job.page_range)
 
     pricing = db.scalars(
         select(models.ShopPricing).where(models.ShopPricing.tenant_id == principal.tenant_id)
@@ -238,6 +239,7 @@ async def finalize_job(
             "color_mode": job.color_mode,
             "layout_pages": job.layout_pages,
             "layout_type": job.layout_type,
+            "page_range": job.page_range,
             "amount": job.amount,
             "customer_name": job.customer_name,
             "customer_phone": job.customer_phone,

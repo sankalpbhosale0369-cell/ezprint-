@@ -191,40 +191,147 @@
     })();
   }
 
-  async function __renderPdfToPreviews(pdfData, oneBasedIndices) {
+  /** @param {Uint8Array} pdfData */
+  function __getPdfDocument(pdfData) {
+    if (!global.pdfjsLib) {
+      return Promise.reject(new Error('PDF preview library not loaded'));
+    }
+    const base = {
+      data: pdfData,
+      disableRange: true,
+      disableStream: true,
+      isEvalSupported: false,
+    };
+    return global.pdfjsLib.getDocument(base).promise;
+  }
+
+  function __layoutGrid(n) {
+    const v = Math.max(1, parseInt(String(n), 10) || 1);
+    switch (v) {
+      case 2: return { rows: 1, cols: 2 };
+      case 4: return { rows: 2, cols: 2 };
+      case 6: return { rows: 2, cols: 3 };
+      case 8: return { rows: 2, cols: 4 };
+      case 9: return { rows: 3, cols: 3 };
+      case 16: return { rows: 4, cols: 4 };
+      default: return { rows: 1, cols: 1 };
+    }
+  }
+
+  function __applyGrayscaleCanvas(canvas) {
+    var ctx = canvas.getContext('2d');
+    var w = canvas.width;
+    var h = canvas.height;
+    var img = ctx.getImageData(0, 0, w, h);
+    var d = img.data;
+    for (var i = 0; i < d.length; i += 4) {
+      var y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      d[i] = d[i + 1] = d[i + 2] = y;
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  /**
+   * @param {import('pdfjs-dist').PDFPageProxy} page
+   * @param {number} maxW
+   * @param {number} maxH
+   * @param {number} rotation 0 or 90 (extra rotation for print orientation)
+   */
+  function __renderPageFitted(page, maxW, maxH, rotation) {
+    const rot = rotation || 0;
+    const base = page.getViewport({ scale: 1, rotation: rot });
+    const sc = Math.min(maxW / base.width, maxH / base.height, 4);
+    const vp = page.getViewport({ scale: sc, rotation: rot });
+    const canvas = global.document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = Math.floor(vp.width);
+    canvas.height = Math.floor(vp.height);
+    return page.render({ canvasContext: ctx, viewport: vp }).promise.then(function () {
+      return canvas;
+    });
+  }
+
+  /**
+   * @param {object} opt
+   * @param {string} [opt.color_mode]  'Black & White' | 'Color'
+   * @param {string} [opt.orientation] 'Portrait' | 'Landscape'
+   * @param {number} [opt.layout_pages] 1,2,4,6,8,9,16
+   */
+  async function __renderPdfToPreviews(pdfData, oneBasedIndices, opt) {
     if (!global.pdfjsLib) {
       throw new Error('PDF preview library not loaded');
     }
-    const pdf = await global.pdfjsLib.getDocument({ data: pdfData }).promise;
-    const count = Math.min(40, oneBasedIndices.length);
-    const urls = [];
-    for (var i = 0; i < count; i++) {
-      var pnum = oneBasedIndices[i];
-      var page = await pdf.getPage(pnum);
-      var scale = 1.15;
-      var vp = page.getViewport({ scale: scale });
-      var canvas = global.document.createElement('canvas');
-      var ctx = canvas.getContext('2d');
-      canvas.width = vp.width;
-      canvas.height = vp.height;
-      const task = page.render({ canvasContext: ctx, viewport: vp });
-      await task.promise;
-      urls.push(canvas.toDataURL('image/jpeg', 0.82));
+    const settings = opt || {};
+    const colorMode = settings.color_mode || 'Color';
+    const orientation = settings.orientation || 'Portrait';
+    const layoutPages = Math.max(1, parseInt(String(settings.layout_pages || 1), 10) || 1);
+    const isBw = (colorMode + '').toLowerCase().indexOf('black') >= 0;
+    const extraRot = (orientation + '') === 'Landscape' ? 90 : 0;
+    const grid = __layoutGrid(layoutPages);
+    const sheetCapacity = grid.rows * grid.cols;
+
+    var pdf = pdfData;
+    if (!pdf || typeof pdf.getPage !== 'function') {
+      pdf = await __getPdfDocument(pdfData);
     }
+    const numDoc = pdf.numPages;
+    const maxSheets = 40;
+    const urls = [];
+    const indices = oneBasedIndices.slice();
+    const totalSheets = Math.ceil(indices.length / sheetCapacity);
+    const sheetCount = Math.min(maxSheets, totalSheets);
+    const pad = 4;
+    const baseCellW = 420;
+    const baseCellH = 594;
+
+    for (var s = 0; s < sheetCount; s++) {
+      const chunk = [];
+      for (var c = 0; c < sheetCapacity; c++) {
+        var idx = s * sheetCapacity + c;
+        if (idx < indices.length) chunk.push(indices[idx]);
+      }
+      if (chunk.length === 0) break;
+
+      const cellW = Math.floor((baseCellW - pad * (grid.cols + 1)) / grid.cols);
+      const cellH = Math.floor((baseCellH - pad * (grid.rows + 1)) / grid.rows);
+      const sheet = global.document.createElement('canvas');
+      const sctx = sheet.getContext('2d');
+      sheet.width = baseCellW;
+      sheet.height = baseCellH;
+      sctx.fillStyle = '#ffffff';
+      sctx.fillRect(0, 0, sheet.width, sheet.height);
+
+      for (var k = 0; k < chunk.length; k++) {
+        var pnum = chunk[k];
+        var page = await pdf.getPage(pnum);
+        var row = Math.floor(k / grid.cols);
+        var col = k % grid.cols;
+        var cellCanvas = await __renderPageFitted(page, cellW, cellH, extraRot);
+        if (isBw) __applyGrayscaleCanvas(cellCanvas);
+        var x = pad + col * (cellW + pad);
+        var y = pad + row * (cellH + pad);
+        sctx.drawImage(cellCanvas, x, y, cellW, cellH);
+      }
+      urls.push(sheet.toDataURL('image/jpeg', 0.82));
+    }
+
     return {
       previews: urls,
-      totalDocumentPages: pdf.numPages,
+      totalDocumentPages: numDoc,
       selectedCount: oneBasedIndices.length,
+      sheetCount: totalSheets,
+      layoutN: layoutPages,
     };
   }
 
   /**
    * Same general shape as the old Flask /api/preview JSON (for PRINT flow).
    */
-  global.__ezprintClientPrintPreview = async function (file, pageRangeVal, _printSettings, signal) {
+  global.__ezprintClientPrintPreview = async function (file, pageRangeVal, printSettings, signal) {
     if (signal && signal.aborted) throw new global.DOMException('Aborted', 'AbortError');
     const name = (file.name || '').toLowerCase();
     const isImg = /\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
+    const ps = printSettings || {};
     if (isImg) {
       const url = global.URL.createObjectURL(file);
       return {
@@ -233,7 +340,7 @@
         total_pages: 1,
         total_document_pages: 1,
         selected_document_pages: 1,
-        layout_pages: 1,
+        layout_pages: parseInt(String(ps.layout_pages), 10) || 1,
         color_sheets: 0,
         bw_sheets: 0,
         total_amount: 0,
@@ -245,17 +352,35 @@
     if (!global.pdfjsLib) {
       throw new Error('PDF.js not loaded; cannot preview PDFs in the browser.');
     }
-    const tmp = await global.pdfjsLib.getDocument({ data: buf }).promise;
-    const n = tmp.numPages;
-    const idx = __parsePageIndices(pageRangeVal, n);
-    const rendered = await __renderPdfToPreviews(new Uint8Array(buf), idx);
+    const uintData = new Uint8Array(buf);
+    var pdfDoc;
+    try {
+      pdfDoc = await __getPdfDocument(uintData);
+    } catch (e) {
+      var msg = (e && e.message) ? String(e.message) : 'Could not read PDF';
+      throw new Error(msg.indexOf('Invalid') >= 0 || msg.indexOf('structure') >= 0
+        ? 'Invalid PDF structure.'
+        : msg);
+    }
+    const docPageCount = pdfDoc.numPages;
+    const idx = __parsePageIndices(pageRangeVal, docPageCount);
+    const layoutN = Math.max(1, parseInt(String(ps.layout_pages), 10) || 1);
+    const grid0 = __layoutGrid(layoutN);
+    const cap = grid0.rows * grid0.cols;
+    const billableSheets = idx.length === 0 ? 0 : Math.ceil(idx.length / cap);
+    const renderOpts = {
+      color_mode: ps.color_mode,
+      orientation: ps.orientation,
+      layout_pages: layoutN,
+    };
+    const rendered = await __renderPdfToPreviews(pdfDoc, idx, renderOpts);
     return {
       success: true,
       previews: rendered.previews,
-      total_pages: rendered.selectedCount,
-      total_document_pages: n,
+      total_pages: billableSheets < 1 ? 1 : billableSheets,
+      total_document_pages: docPageCount,
       selected_document_pages: idx.length,
-      layout_pages: 1,
+      layout_pages: layoutN,
       color_sheets: 0,
       bw_sheets: 0,
       total_amount: 0,
@@ -270,10 +395,18 @@
       throw new Error('PDF.js not loaded');
     }
     const buf = await pdfFile.arrayBuffer();
-    const tmp = await global.pdfjsLib.getDocument({ data: buf }).promise;
-    const n = tmp.numPages;
-    const idx = __parsePageIndices(pageRangeStr, n);
-    const rendered = await __renderPdfToPreviews(new Uint8Array(buf), idx);
+    const uintData = new Uint8Array(buf);
+    let pdf;
+    try {
+      pdf = await __getPdfDocument(uintData);
+    } catch (e) {
+      var xmsg = (e && e.message) ? String(e.message) : 'Could not read PDF';
+      throw new Error(xmsg.indexOf('Invalid') >= 0 || xmsg.indexOf('structure') >= 0
+        ? 'Invalid PDF structure.'
+        : xmsg);
+    }
+    const idx = __parsePageIndices(pageRangeStr, pdf.numPages);
+    const rendered = await __renderPdfToPreviews(pdf, idx, {});
     return {
       success: true,
       previews: rendered.previews,

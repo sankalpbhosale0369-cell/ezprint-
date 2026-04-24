@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 JobStatus = Literal[
     "AwaitingUpload",
     "Queued",
+    "Processing",
     "Printing",
     "Completed",
     "Failed",
@@ -77,6 +78,7 @@ class JobSummary(BaseModel):
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
 
 
 class JobListResponse(BaseModel):

@@ -152,6 +152,9 @@ class WsClient:
             logger.exception("ws send failed type=%s", type_)
             return False
 
+    def report_processing_started(self, job_id: str) -> bool:
+        return self._send("processing_started", {"job_id": job_id})
+
     def report_print_started(self, job_id: str) -> bool:
         return self._send("print_started", {"job_id": job_id})
 

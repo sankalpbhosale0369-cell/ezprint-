@@ -1023,6 +1023,28 @@ body:has(#xeroxScannerSection:not([style*="display: none"])) {
     border-color: #fecaca;
 }
 
+.job-details-status-pill.is-processing {
+    background: #e0e7ff;
+    color: #3730a3;
+    border-color: #c7d2fe;
+}
+
+.job-details-status-pill.is-cancelled {
+    background: #f3f4f6;
+    color: #4b5563;
+    border-color: #d1d5db;
+}
+
+.timeline-step.current.failed .step-icon,
+.timeline-step.current.failed .step-title {
+    color: #b91c1c;
+}
+
+.timeline-step.current.cancelled .step-icon,
+.timeline-step.current.cancelled .step-title {
+    color: #6b7280;
+}
+
 /* Modern status card */
 .status-card {
     background: #ffffff;

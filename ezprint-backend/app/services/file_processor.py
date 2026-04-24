@@ -93,3 +93,108 @@ def classify_bytes(file_type: str, data: bytes) -> PageStats:
         return classify_image(data)
     # For docx/xlsx etc. we just stamp a single page and bill BW by default.
     return PageStats(total_pages=1, color_pages=0)
+
+
+def _pdf_num_pages(data: bytes) -> int:
+    try:
+        import fitz  # PyMuPDF
+
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            return int(doc.page_count) or 1
+    except Exception:
+        pass
+    try:
+        import PyPDF2  # type: ignore
+
+        return max(1, len(PyPDF2.PdfReader(io.BytesIO(data)).pages))
+    except Exception:
+        return 1
+
+
+def parse_page_range_to_indices(page_range: str | None, num_pages: int) -> list[int]:
+    """1-based page indices to bill, matching the customer upload UI.
+
+    Empty / whitespace `page_range` means all pages. Invalid segments are skipped; if
+    nothing parses, all pages are used (same as the browser helper).
+    """
+    if not num_pages or num_pages < 1:
+        return []
+    s = (page_range or "").strip()
+    if not s:
+        return list(range(1, num_pages + 1))
+    raw = "".join(s.split())
+    out: list[int] = []
+    seen: set[int] = set()
+    for part in raw.split(","):
+        if not part:
+            continue
+        if "-" in part:
+            ab = part.split("-", 1)
+            try:
+                lo = max(1, int(ab[0]))
+                hi = min(num_pages, int(ab[1]))
+            except ValueError:
+                continue
+            for p in range(lo, hi + 1):
+                if 1 <= p <= num_pages and p not in seen:
+                    seen.add(p)
+                    out.append(p)
+        else:
+            try:
+                p = int(part)
+            except ValueError:
+                continue
+            if 1 <= p <= num_pages and p not in seen:
+                seen.add(p)
+                out.append(p)
+    if not out:
+        return list(range(1, num_pages + 1))
+    return sorted(out)
+
+
+def _classify_pdf_pages_fitz(data: bytes, one_based_indices: list[int]) -> PageStats:
+    import fitz  # PyMuPDF
+
+    color_pages = 0
+    with fitz.open(stream=data, filetype="pdf") as doc:
+        n = doc.page_count
+        valid = [p for p in sorted(set(one_based_indices)) if 1 <= p <= n]
+        for p in valid:
+            page = doc[p - 1]
+            pix = page.get_pixmap(matrix=fitz.Matrix(0.5, 0.5), alpha=False)
+            if pix.n >= 3:
+                sample = pix.samples
+                stride = max(1, len(sample) // 3_000)
+                has_color = False
+                for i in range(0, len(sample) - 2, 3 * stride):
+                    r, g, b = sample[i], sample[i + 1], sample[i + 2]
+                    if abs(r - g) > 8 or abs(g - b) > 8 or abs(r - b) > 8:
+                        has_color = True
+                        break
+                if has_color:
+                    color_pages += 1
+    return PageStats(total_pages=len(valid), color_pages=color_pages)
+
+
+def classify_pdf_for_page_range(data: bytes, page_range: str | None) -> PageStats:
+    """Classify only pages included in *page_range* (for billing after finalize)."""
+    n = _pdf_num_pages(data)
+    indices = parse_page_range_to_indices(page_range, n)
+    if not indices:
+        return PageStats(total_pages=1, color_pages=0)
+    if len(indices) == n and indices[0] == 1 and indices[-1] == n and len(set(indices)) == n:
+        return classify_pdf(data)
+    try:
+        return _classify_pdf_pages_fitz(data, indices)
+    except Exception as exc:
+        logger.info("fitz page-range classification unavailable (%s); using page count only", exc)
+    valid = [p for p in indices if 1 <= p <= n]
+    return PageStats(total_pages=max(1, len(valid)), color_pages=0)
+
+
+def classify_bytes_for_job(file_type: str, data: bytes, page_range: str | None) -> PageStats:
+    """Like ``classify_bytes`` but applies PDF *page_range* to page/color counts for billing."""
+    ft = (file_type or "").lower().lstrip(".")
+    if ft == "pdf":
+        return classify_pdf_for_page_range(data, page_range)
+    return classify_bytes(file_type, data)

@@ -34,7 +34,8 @@ TERMINAL: Set[str] = {"Completed", "Failed", "Cancelled"}
 # Per-state list of legal next states. Anything not listed is an error.
 ALLOWED: dict[str, Set[str]] = {
     "AwaitingUpload": {"Queued", "Cancelled", "Failed"},
-    "Queued":         {"Printing", "Cancelled", "Failed"},
+    "Queued":         {"Processing", "Printing", "Cancelled", "Failed"},
+    "Processing":     {"Printing", "Cancelled", "Failed"},
     "Printing":       {"Completed", "Failed", "Cancelled"},
     # Terminal states accept no further transitions.
     "Completed":      set(),
