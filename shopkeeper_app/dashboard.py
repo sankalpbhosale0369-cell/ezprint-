@@ -2098,44 +2098,39 @@ class JobPopupDialog(QDialog):
                     printer_manager = getattr(self.dashboard, 'printer_manager', None)
                     if printer_manager:
                         try:
-                            # Get available printers for routing
-                            available_printers_raw = printer_manager.get_available_printers()
-                            available_printers = [p.get('name') for p in available_printers_raw if p.get('name')]
-                            
-                            if available_printers:
-                                # Call routing function directly
-                                selected, error = printer_manager.select_printer_for_job(self.job, available_printers)
-                                
-                                # Update instance variables and UI immediately (Mode B)
-                                self.routed_printer_name = selected
-                                self.routing_error_message = error
-                                
-                                if error:
-                                    # Show routing error in printer label position (Objective 4)
-                                    self.printer_label.setText(error)
-                                    self.printer_label.setStyleSheet("""
-                                        color: #dc2626;
-                                        font-size: 13px;
-                                        font-weight: 600;
-                                        padding: 4px;
-                                        background-color: #fef2f2;
-                                        border: 1px solid #fecaca;
-                                        border-radius: 6px;
-                                    """)
-                                    self.error_label.hide() # Do not duplicate messages
-                                    
-                                    # Show print button for manual retry after printer is connected
-                                    self.print_btn.show()
-                                    self.print_btn.setText("RETRY")
-                                    logger.warning(f"Auto-print blocked by routing error for job {self.job.job_id}: {error}")
-                                    return
-                                else:
-                                    # Update printer label with successful route
-                                    self.printer_label.setText(f"Printer: {selected or 'System Default'}")
-                                    self.printer_label.setStyleSheet("font-weight: 700; color: #1a3d7a; font-size: 14px;")
-                                    self.error_label.hide()
-                            
-                            # No routing error - proceed with auto-print
+                            # select_printer_for_job always uses get_authorized_printers()
+                            # internally — no need to pre-fetch or guard on available_printers.
+                            selected, error = printer_manager.select_printer_for_job(self.job)
+
+                            # Update instance variables and UI immediately
+                            self.routed_printer_name = selected
+                            self.routing_error_message = error
+
+                            if error:
+                                # Show routing error in printer label position
+                                self.printer_label.setText(error)
+                                self.printer_label.setStyleSheet("""
+                                    color: #dc2626;
+                                    font-size: 13px;
+                                    font-weight: 600;
+                                    padding: 4px;
+                                    background-color: #fef2f2;
+                                    border: 1px solid #fecaca;
+                                    border-radius: 6px;
+                                """)
+                                self.error_label.hide()
+
+                                # Show print button so shopkeeper can retry manually
+                                self.print_btn.show()
+                                self.print_btn.setText("RETRY")
+                                logger.warning(f"Auto-print blocked by routing error for job {self.job.job_id}: {error}")
+                                return
+                            else:
+                                # Update printer label with successful route
+                                self.printer_label.setText(f"Printer: {selected or 'System Default'}")
+                                self.printer_label.setStyleSheet("font-weight: 700; color: #1a3d7a; font-size: 14px;")
+                                self.error_label.hide()
+
                         except Exception as e:
                             logger.warning(f"Error during auto-print routing check: {e}")
                     
@@ -2434,8 +2429,10 @@ class JobPopupDialog(QDialog):
                     job_id = data.get('job_id')
                     status = data.get('status')
                     if job_id == self.job.job_id:
-                        self.status_val.setText(status)
-                        self.update_status_style(status)
+                        # Route through update_status so self.job.status is kept
+                        # in sync — cancel visibility, offline-check early-return,
+                        # and auto-dismiss guard all read self.job.status.
+                        self.update_status(status)
         except Exception as e:
             logger.error(f"Error in popup status update: {e}")
 
@@ -2502,10 +2499,11 @@ class JobPopupDialog(QDialog):
                     self.dashboard.dismissed_auto_jobs.add(self.job.job_id)
                     logger.info(f"Auto Mode: Job {self.job.job_id} dismissed via X. Will not reopen until status changes.")
             
-            # Ensure finished(int) signal is emitted to reset dashboard state
-            self.accept()
+            # Use reject() so closing via X emits finished(Rejected) but NOT
+            # accepted() — that signal is reserved for PICKUP to advance the queue.
+            self.reject()
         except Exception:
-            self.accept()
+            self.reject()
 
 
     def update_status_style(self, status):
