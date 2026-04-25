@@ -128,6 +128,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // Preview section elements
     const previewSection = document.getElementById('previewSection');
     const previewImage = document.getElementById('previewImage');
+    const previewDocx = document.getElementById('previewDocx');
     const previewFilename = document.getElementById('previewFilename');
     const previewSize = document.getElementById('previewSize');
     const previewPages = document.getElementById('previewPages');
@@ -190,6 +191,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Multi-page preview state (BUG FIX: Added to support proper page navigation)
     let previewUrls = [];  // Array of all preview URLs
+    let previewHtmlSheets = []; // Array of direct-rendered document preview sheets
+    let previewMode = 'image'; // 'image' or 'html'
+    let previewSource = ''; // e.g. 'docx'
+    let documentPreviewModal = null;
+    let documentPreviewModalImage = null;
+    let documentPreviewModalIndicator = null;
     let currentPageIndex = 0;  // Current page index (0-based)
     let totalPages = 0;  // Total number of pages
 
@@ -411,36 +418,51 @@ document.addEventListener('DOMContentLoaded', function () {
         // Page navigation controls (BUG FIX: Added to enable multi-page navigation)
         if (prevPageBtn) {
             prevPageBtn.addEventListener('click', function () {
-                if (currentPageIndex > 0) {
-                    currentPageIndex--;
-                    updatePreviewPage();
-                }
+                setPreviewPage(currentPageIndex - 1);
             });
         }
 
         if (nextPageBtn) {
             nextPageBtn.addEventListener('click', function () {
-                if (currentPageIndex < previewUrls.length - 1) {
-                    currentPageIndex++;
-                    updatePreviewPage();
-                }
+                setPreviewPage(currentPageIndex + 1);
             });
         }
     }
 
+    function getPreviewCount() {
+        return previewMode === 'html' ? previewHtmlSheets.length : previewUrls.length;
+    }
+
+    function setPreviewPage(nextIndex) {
+        const previewCount = getPreviewCount();
+        if (previewCount === 0) return;
+        currentPageIndex = Math.max(0, Math.min(nextIndex, previewCount - 1));
+        updatePreviewPage();
+    }
+
     // Update preview page display (BUG FIX: Now actually changes the preview image)
     function updatePreviewPage() {
-        if (previewUrls.length === 0 || !previewImage) {
+        const previewCount = getPreviewCount();
+        if (previewCount === 0) {
             return;
         }
+        currentPageIndex = Math.max(0, Math.min(currentPageIndex, previewCount - 1));
 
-        // Update preview image source
-        previewImage.src = previewUrls[currentPageIndex];
+        if (previewMode === 'html') {
+            renderHtmlPreviewPage();
+        } else if (previewImage) {
+            if (previewDocx) {
+                previewDocx.style.display = 'none';
+                previewDocx.innerHTML = '';
+            }
+            previewImage.style.display = 'block';
+            previewImage.src = previewUrls[currentPageIndex];
+        }
 
         // Update page indicator
         // PAGE RANGE FIX: Shows position within filtered pages (e.g., "Page 1 of 4" for first selected page)
         if (pageIndicator) {
-            pageIndicator.textContent = `Page ${currentPageIndex + 1} of ${totalPages}`;
+            pageIndicator.textContent = `Page ${currentPageIndex + 1} of ${previewCount}`;
         }
 
         // Update navigation button states
@@ -450,14 +472,181 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         if (nextPageBtn) {
-            nextPageBtn.disabled = currentPageIndex >= previewUrls.length - 1;
-            nextPageBtn.style.opacity = currentPageIndex >= previewUrls.length - 1 ? '0.5' : '1';
+            nextPageBtn.disabled = currentPageIndex >= previewCount - 1;
+            nextPageBtn.style.opacity = currentPageIndex >= previewCount - 1 ? '0.5' : '1';
         }
 
         // Reset zoom and rotation when changing pages
         currentZoom = 1;
         currentRotation = 0;
         updateImageTransform();
+        updateDocumentPreviewModal();
+    }
+
+    function ensureDocumentPreviewModal() {
+        if (documentPreviewModal) return;
+        documentPreviewModal = document.createElement('div');
+        documentPreviewModal.className = 'document-preview-modal';
+        documentPreviewModal.setAttribute('aria-hidden', 'true');
+        documentPreviewModal.innerHTML = `
+            <div class="document-preview-backdrop" data-doc-preview-close="true"></div>
+            <div class="document-preview-dialog" role="dialog" aria-modal="true" aria-label="Document preview">
+                <div class="document-preview-header">
+                    <div>
+                        <div class="document-preview-title">Document Preview</div>
+                        <div class="document-preview-subtitle" id="documentPreviewSubtitle"></div>
+                    </div>
+                    <button type="button" class="document-preview-close" data-doc-preview-close="true" aria-label="Close preview">×</button>
+                </div>
+                <div class="document-preview-body">
+                    <button type="button" class="document-preview-nav document-preview-prev" aria-label="Previous sheet">‹</button>
+                    <img class="document-preview-image" alt="Document sheet preview">
+                    <button type="button" class="document-preview-nav document-preview-next" aria-label="Next sheet">›</button>
+                </div>
+                <div class="document-preview-footer">
+                    <span class="document-preview-indicator">Sheet 1 of 1</span>
+                    <span class="document-preview-settings"></span>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(documentPreviewModal);
+        documentPreviewModalImage = documentPreviewModal.querySelector('.document-preview-image');
+        documentPreviewModalIndicator = documentPreviewModal.querySelector('.document-preview-indicator');
+        documentPreviewModal.addEventListener('click', event => {
+            if (event.target && event.target.getAttribute('data-doc-preview-close') === 'true') {
+                closeDocumentPreviewModal();
+            }
+        });
+        const prev = documentPreviewModal.querySelector('.document-preview-prev');
+        const next = documentPreviewModal.querySelector('.document-preview-next');
+        if (prev) {
+            prev.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                setPreviewPage(currentPageIndex - 1);
+            });
+        }
+        if (next) {
+            next.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                setPreviewPage(currentPageIndex + 1);
+            });
+        }
+        document.addEventListener('keydown', event => {
+            if (!documentPreviewModal || !documentPreviewModal.classList.contains('open')) return;
+            if (event.key === 'Escape') closeDocumentPreviewModal();
+        });
+    }
+
+    function openDocumentPreviewModal() {
+        if (!previewUrls.length) return;
+        ensureDocumentPreviewModal();
+        updateDocumentPreviewModal();
+        documentPreviewModal.classList.add('open');
+        documentPreviewModal.setAttribute('aria-hidden', 'false');
+        document.body.classList.add('modal-open');
+    }
+
+    function closeDocumentPreviewModal() {
+        if (!documentPreviewModal) return;
+        documentPreviewModal.classList.remove('open');
+        documentPreviewModal.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('modal-open');
+    }
+
+    function updateDocumentPreviewModal() {
+        if (!documentPreviewModal || !documentPreviewModal.classList.contains('open')) return;
+        const previewCount = getPreviewCount();
+        if (documentPreviewModalImage && previewUrls[currentPageIndex]) {
+            documentPreviewModalImage.src = previewUrls[currentPageIndex];
+        }
+        if (documentPreviewModalIndicator) {
+            documentPreviewModalIndicator.textContent = `Sheet ${currentPageIndex + 1} of ${previewCount}`;
+        }
+        const subtitle = documentPreviewModal.querySelector('#documentPreviewSubtitle');
+        if (subtitle && currentFile) {
+            subtitle.textContent = currentFile.name;
+        }
+        const settings = documentPreviewModal.querySelector('.document-preview-settings');
+        if (settings) {
+            const layoutText = previewLayout ? previewLayout.textContent : '1 per sheet';
+            const orientationText = previewOrientation ? previewOrientation.textContent : '-';
+            const colorText = previewColorMode ? previewColorMode.textContent : '-';
+            settings.textContent = `${layoutText} • ${orientationText} • ${colorText}`;
+        }
+        const prev = documentPreviewModal.querySelector('.document-preview-prev');
+        const next = documentPreviewModal.querySelector('.document-preview-next');
+        if (prev) prev.disabled = currentPageIndex <= 0;
+        if (next) next.disabled = currentPageIndex >= previewCount - 1;
+    }
+
+    function renderHtmlPreviewPage() {
+        if (!previewDocx || previewHtmlSheets.length === 0) return;
+        const sheet = previewHtmlSheets[currentPageIndex];
+        previewDocx.innerHTML = '';
+        previewDocx.style.display = 'flex';
+        if (previewImage) {
+            previewImage.style.display = 'none';
+            previewImage.removeAttribute('src');
+        }
+
+        const sheetEl = document.createElement('div');
+        sheetEl.className = 'docx-preview-sheet';
+        sheetEl.style.setProperty('--preview-sheet-width', `${sheet.sheetWidth || 420}px`);
+        sheetEl.style.setProperty('--preview-sheet-height', `${sheet.sheetHeight || 594}px`);
+        sheetEl.style.aspectRatio = `${sheet.sheetWidth || 420} / ${sheet.sheetHeight || 594}`;
+        sheetEl.style.gridTemplateRows = `repeat(${sheet.rows || 1}, minmax(0, 1fr))`;
+        sheetEl.style.gridTemplateColumns = `repeat(${sheet.cols || 1}, minmax(0, 1fr))`;
+
+        (sheet.cells || []).forEach(html => {
+            const cell = document.createElement('div');
+            cell.className = 'docx-preview-cell';
+            const inner = document.createElement('div');
+            inner.className = 'docx-preview-cell-inner';
+            inner.innerHTML = `${sheet.styles || ''}${html}`;
+            cell.appendChild(inner);
+            sheetEl.appendChild(cell);
+        });
+
+        previewDocx.appendChild(sheetEl);
+        requestAnimationFrame(fitHtmlPreviewCells);
+    }
+
+    function fitHtmlPreviewCells() {
+        if (!previewDocx) return;
+        previewDocx.querySelectorAll('.docx-preview-cell').forEach(cell => {
+            const inner = cell.querySelector('.docx-preview-cell-inner');
+            if (!inner) return;
+            const content = inner.querySelector('section') || inner.firstElementChild || inner;
+            const contentW = content.scrollWidth || content.offsetWidth || inner.scrollWidth;
+            const contentH = content.scrollHeight || content.offsetHeight || inner.scrollHeight;
+            if (!contentW || !contentH || !cell.clientWidth || !cell.clientHeight) return;
+            const scale = Math.min(cell.clientWidth / contentW, cell.clientHeight / contentH, 1);
+            inner.style.width = `${contentW}px`;
+            inner.style.height = `${contentH}px`;
+            inner.style.transform = `scale(${scale})`;
+        });
+    }
+
+    function showImagePreview(url) {
+        previewMode = 'image';
+        previewHtmlSheets = [];
+        if (previewDocx) {
+            previewDocx.style.display = 'none';
+            previewDocx.innerHTML = '';
+        }
+        if (previewImage) {
+            previewImage.style.display = 'block';
+            previewImage.src = url;
+        }
+    }
+
+    function showHtmlPreviews(sheets) {
+        previewMode = 'html';
+        previewUrls = [];
+        previewHtmlSheets = Array.isArray(sheets) ? sheets : [];
+        renderHtmlPreviewPage();
     }
 
     // Setup customization listeners for dynamic preview updates
@@ -812,8 +1001,12 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function updateImageTransform() {
+        const transformValue = `scale(${currentZoom}) rotate(${currentRotation}deg)`;
         if (previewImage) {
-            previewImage.style.transform = `scale(${currentZoom}) rotate(${currentRotation}deg)`;
+            previewImage.style.transform = transformValue;
+        }
+        if (previewDocx) {
+            previewDocx.style.transform = transformValue;
         }
         if (zoomLevel) {
             zoomLevel.textContent = Math.round(currentZoom * 100) + '%';
@@ -912,15 +1105,25 @@ document.addEventListener('DOMContentLoaded', function () {
                         ? (data.total_amount / currentCopies) : null;
                     backendColorSheets = data.color_sheets;
                     backendBWSheets = data.bw_sheets;
+                    previewSource = data.preview_source || '';
 
-                    // PAGE RANGE FIX: Store filtered preview URLs based on page range
-                    if (data.previews && Array.isArray(data.previews) && data.previews.length > 0) {
+                    // PAGE RANGE FIX: Store filtered preview sheets based on page range
+                    if (data.preview_type === 'html' && data.previews && Array.isArray(data.previews) && data.previews.length > 0) {
+                        previewHtmlSheets = data.previews;
+                        previewUrls = [];
+                        previewMode = 'html';
+                        totalPages = data.total_pages || data.previews.length;
+                    } else if (data.previews && Array.isArray(data.previews) && data.previews.length > 0) {
                         previewUrls = data.previews;
+                        previewHtmlSheets = [];
+                        previewMode = 'image';
                         // total_pages now represents the number of SELECTED pages (after filtering)
                         totalPages = data.total_pages || data.previews.length;
                     } else if (data.preview_url) {
                         // Backward compatibility: single preview URL
                         previewUrls = [data.preview_url];
+                        previewHtmlSheets = [];
+                        previewMode = 'image';
                         totalPages = data.total_pages || 1;
                     } else {
                         throw new Error('No preview URLs received');
@@ -929,9 +1132,11 @@ document.addEventListener('DOMContentLoaded', function () {
                     // Reset to first page of filtered selection
                     currentPageIndex = 0;
 
-                    // Update preview image
-                    if (previewImage) {
-                        previewImage.src = previewUrls[0];
+                    // Update preview content
+                    if (previewMode === 'html') {
+                        showHtmlPreviews(previewHtmlSheets);
+                    } else if (previewUrls.length > 0) {
+                        showImagePreview(previewUrls[0]);
                     }
                     if (previewSection) {
                         previewSection.dataset.source = 'print';
@@ -1004,9 +1209,13 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (previewColorMode) previewColorMode.textContent = colorMode.value;
                     if (previewCopies) previewCopies.textContent = copies.value;
                     if (previewPageRange) previewPageRange.textContent = pageRangeInput.value || 'All Pages';
+                    if (previewSource === 'docx') {
+                        openDocumentPreviewModal();
+                    }
 
                     // Show/hide navigation controls based on page count
                     if (totalPages > 1) {
+                        const previewCount = getPreviewCount();
                         if (prevPageBtn) {
                             prevPageBtn.style.display = 'inline-block';
                             prevPageBtn.disabled = true;
@@ -1014,12 +1223,12 @@ document.addEventListener('DOMContentLoaded', function () {
                         }
                         if (nextPageBtn) {
                             nextPageBtn.style.display = 'inline-block';
-                            nextPageBtn.disabled = totalPages <= 1;
-                            nextPageBtn.style.opacity = totalPages <= 1 ? '0.5' : '1';
+                            nextPageBtn.disabled = previewCount <= 1;
+                            nextPageBtn.style.opacity = previewCount <= 1 ? '0.5' : '1';
                         }
                         if (pageIndicator) {
                             pageIndicator.style.display = 'inline-block';
-                            pageIndicator.textContent = `Page 1 of ${totalPages}`;
+                            pageIndicator.textContent = `Page 1 of ${previewCount}`;
                         }
                     } else {
                         // Single page: hide navigation
@@ -1297,7 +1506,10 @@ document.addEventListener('DOMContentLoaded', function () {
                     backendColorSheets = data.color_sheets;
                     backendBWSheets = data.bw_sheets;
 
+                    previewMode = 'image';
+                    previewSource = '';
                     previewUrls = data.previews;
+                    previewHtmlSheets = [];
                     totalPages = (data.total_pages != null && data.total_pages > 0)
                         ? data.total_pages
                         : previewUrls.length;
@@ -1329,7 +1541,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             reject(new Error('Preview image failed to load'));
                         };
 
-                        img.src = previewUrls[currentPageIndex];
+                        showImagePreview(previewUrls[currentPageIndex]);
                     });
 
                     // Double-check generation ID after image load
@@ -1378,17 +1590,18 @@ document.addEventListener('DOMContentLoaded', function () {
 
                     // Show/hide navigation controls
                     if (totalPages > 1) {
+                        const previewCount = getPreviewCount();
                         if (prevPageBtn) {
                             prevPageBtn.style.display = 'inline-block';
                             prevPageBtn.disabled = currentPageIndex === 0;
                         }
                         if (nextPageBtn) {
                             nextPageBtn.style.display = 'inline-block';
-                            nextPageBtn.disabled = currentPageIndex >= totalPages - 1;
+                            nextPageBtn.disabled = currentPageIndex >= previewCount - 1;
                         }
                         if (pageIndicator) {
                             pageIndicator.style.display = 'inline-block';
-                            pageIndicator.textContent = `Page ${currentPageIndex + 1} of ${totalPages}`;
+                            pageIndicator.textContent = `Page ${currentPageIndex + 1} of ${previewCount}`;
                         }
                     } else {
                         if (prevPageBtn) prevPageBtn.style.display = 'none';

@@ -218,6 +218,28 @@
     }
   }
 
+  function __previewSheetSize(orientation, layoutPages) {
+    const layoutN = Math.max(1, parseInt(String(layoutPages || 1), 10) || 1);
+    const wantsLandscape = String(orientation || 'Portrait') === 'Landscape' || layoutN === 2;
+    return wantsLandscape
+      ? { width: 594, height: 420 }
+      : { width: 420, height: 594 };
+  }
+
+  function __previewPixelRatio() {
+    return Math.min(3, Math.max(2, Number(global.devicePixelRatio) || 1));
+  }
+
+  function __createPreviewSheetCanvas(width, height, pixelRatio) {
+    const ratio = pixelRatio || __previewPixelRatio();
+    const canvas = global.document.createElement('canvas');
+    canvas.width = Math.floor(width * ratio);
+    canvas.height = Math.floor(height * ratio);
+    const ctx = canvas.getContext('2d');
+    ctx.scale(ratio, ratio);
+    return { canvas: canvas, ctx: ctx };
+  }
+
   function __applyGrayscaleCanvas(canvas) {
     var ctx = canvas.getContext('2d');
     var w = canvas.width;
@@ -235,13 +257,20 @@
    * @param {import('pdfjs-dist').PDFPageProxy} page
    * @param {number} maxW
    * @param {number} maxH
-   * @param {number} rotation 0 or 90 (extra rotation for print orientation)
+   * @param {number} rotation optional explicit page rotation
    */
   function __renderPageFitted(page, maxW, maxH, rotation) {
-    const rot = rotation || 0;
-    const base = page.getViewport({ scale: 1, rotation: rot });
+    const viewportArgs = { scale: 1 };
+    if (typeof rotation === 'number' && !isNaN(rotation)) {
+      viewportArgs.rotation = rotation;
+    }
+    const base = page.getViewport(viewportArgs);
     const sc = Math.min(maxW / base.width, maxH / base.height, 4);
-    const vp = page.getViewport({ scale: sc, rotation: rot });
+    const renderArgs = { scale: sc };
+    if (typeof rotation === 'number' && !isNaN(rotation)) {
+      renderArgs.rotation = rotation;
+    }
+    const vp = page.getViewport(renderArgs);
     const canvas = global.document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     canvas.width = Math.floor(vp.width);
@@ -251,11 +280,99 @@
     });
   }
 
+  function __drawContained(ctx, sourceCanvas, x, y, maxW, maxH) {
+    const sw = sourceCanvas.width || 1;
+    const sh = sourceCanvas.height || 1;
+    const scale = Math.min(maxW / sw, maxH / sh);
+    const drawW = sw * scale;
+    const drawH = sh * scale;
+    const drawX = x + (maxW - drawW) / 2;
+    const drawY = y + (maxH - drawH) / 2;
+    ctx.drawImage(sourceCanvas, drawX, drawY, drawW, drawH);
+  }
+
+  function __trimCanvasWhitespace(canvas, padding) {
+    const w = canvas.width || 0;
+    const h = canvas.height || 0;
+    if (w < 2 || h < 2) return canvas;
+    const ctx = canvas.getContext('2d');
+    const data = ctx.getImageData(0, 0, w, h).data;
+    var minX = w;
+    var minY = h;
+    var maxX = -1;
+    var maxY = -1;
+    const step = Math.max(1, Math.floor(Math.max(w, h) / 1200));
+    for (var y = 0; y < h; y += step) {
+      for (var x = 0; x < w; x += step) {
+        var i = (y * w + x) * 4;
+        var a = data[i + 3];
+        var r = data[i];
+        var g = data[i + 1];
+        var b = data[i + 2];
+        if (a > 12 && (r < 245 || g < 245 || b < 245)) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < minX || maxY < minY) return canvas;
+    const pad = Math.max(0, padding || 0);
+    minX = Math.max(0, minX - pad);
+    minY = Math.max(0, minY - pad);
+    maxX = Math.min(w - 1, maxX + pad);
+    maxY = Math.min(h - 1, maxY + pad);
+    var cropW = maxX - minX + 1;
+    var cropH = maxY - minY + 1;
+    const targetAspect = 210 / 297;
+    const cropAspect = cropW / cropH;
+    if (cropAspect < targetAspect) {
+      var wantedW = Math.min(w, Math.ceil(cropH * targetAspect));
+      var extraW = wantedW - cropW;
+      minX = Math.max(0, minX - Math.floor(extraW / 2));
+      maxX = Math.min(w - 1, minX + wantedW - 1);
+      minX = Math.max(0, maxX - wantedW + 1);
+    } else if (cropAspect > targetAspect) {
+      var wantedH = Math.min(h, Math.ceil(cropW / targetAspect));
+      var extraH = wantedH - cropH;
+      minY = Math.max(0, minY - Math.floor(extraH / 2));
+      maxY = Math.min(h - 1, minY + wantedH - 1);
+      minY = Math.max(0, maxY - wantedH + 1);
+    }
+    cropW = maxX - minX + 1;
+    cropH = maxY - minY + 1;
+    if (cropW >= w * 0.92 && cropH >= h * 0.92) return canvas;
+    const out = global.document.createElement('canvas');
+    out.width = cropW;
+    out.height = cropH;
+    out.getContext('2d').drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
+    return out;
+  }
+
+  function __splitTallCanvas(canvas) {
+    const w = canvas.width || 0;
+    const h = canvas.height || 0;
+    if (w < 1 || h < 1) return [];
+    const a4SliceH = Math.max(1, Math.round((w * 297) / 210));
+    if (h <= a4SliceH * 1.25) return [canvas];
+    const out = [];
+    for (var y = 0; y < h; y += a4SliceH) {
+      var partH = Math.min(a4SliceH, h - y);
+      var c = global.document.createElement('canvas');
+      c.width = w;
+      c.height = partH;
+      c.getContext('2d').drawImage(canvas, 0, y, w, partH, 0, 0, w, partH);
+      out.push(c);
+    }
+    return out;
+  }
+
   /**
    * One raster image (or unrecognised embed) → single-page A4 PDF bytes (for PDF.js preview).
    * Mirrors the PRINT “combine images to PDF” layout in customer.js.
    */
-  async function __rasterFileToPdfBytes(file, signal) {
+  async function __rasterFileToPdfBytes(file, signal, printSettings) {
     if (signal && signal.aborted) {
       throw new global.DOMException('Aborted', 'AbortError');
     }
@@ -302,8 +419,12 @@
         throw new Error('Unsupported or unreadable image for preview.');
       }
     }
-    const pageWidth = 595;
-    const pageHeight = 842;
+    const previewSize = __previewSheetSize(
+      printSettings && printSettings.orientation,
+      1
+    );
+    const pageWidth = previewSize.width === 594 ? 842 : 595;
+    const pageHeight = previewSize.width === 594 ? 595 : 842;
     const margin = 20;
     const pdfPage = pdfDoc.addPage([pageWidth, pageHeight]);
     const availableWidth = pageWidth - 2 * margin;
@@ -478,6 +599,151 @@
     return pdfOut.save();
   }
 
+  function __cloneElementMarkup(el) {
+    var holder = global.document.createElement('div');
+    holder.appendChild(el.cloneNode(true));
+    return holder.innerHTML;
+  }
+
+  async function __docxToImagePreviews(file, pageRangeVal, settings, signal) {
+    if (signal && signal.aborted) {
+      throw new global.DOMException('Aborted', 'AbortError');
+    }
+    if (!global.docx || typeof global.docx.renderAsync !== 'function') {
+      throw new Error('Word document preview renderer not loaded');
+    }
+    if (!global.html2canvas) {
+      throw new Error('Document renderer not loaded');
+    }
+
+    const buf = await file.arrayBuffer();
+    const host = global.document.createElement('div');
+    host.id = 'ezprint-docx-direct-temp';
+    host.setAttribute('aria-hidden', 'true');
+    host.style.cssText = [
+      'position:fixed', 'left:-12000px', 'top:0',
+      'width:900px', 'height:auto', 'background:#fff',
+      'z-index:0', 'overflow:visible',
+    ].join(';');
+    global.document.body.appendChild(host);
+    try {
+      await global.docx.renderAsync(buf, host, host, {
+        className: 'docx',
+        inWrapper: true,
+        ignoreWidth: false,
+        ignoreHeight: false,
+        ignoreFonts: false,
+        breakPages: true,
+        experimental: true,
+      });
+      if (signal && signal.aborted) {
+        throw new global.DOMException('Aborted', 'AbortError');
+      }
+      var pageEls = Array.prototype.slice.call(
+        host.querySelectorAll('.docx-wrapper > section.docx, .docx-wrapper > section, section.docx, section')
+      ).filter(function (el) {
+        return (el.offsetWidth > 0 && el.offsetHeight > 0) ||
+          el.textContent.trim() ||
+          el.querySelector('img,table,svg,canvas');
+      });
+      if (!pageEls.length) {
+        pageEls = [host];
+      }
+      const layoutPages = Math.max(1, parseInt(String(settings.layout_pages || 1), 10) || 1);
+      const colorMode = settings.color_mode || 'Color';
+      const isBw = (colorMode + '').toLowerCase().indexOf('black') >= 0;
+      const grid = __layoutGrid(layoutPages);
+      const cap = grid.rows * grid.cols;
+      const renderedPages = [];
+      const sourceIndices = __parsePageIndices(pageRangeVal, pageEls.length);
+      for (var rp = 0; rp < sourceIndices.length; rp++) {
+        if (signal && signal.aborted) {
+          throw new global.DOMException('Aborted', 'AbortError');
+        }
+        var renderSrc = pageEls[sourceIndices[rp] - 1];
+        if (!renderSrc) continue;
+        var renderedCanvas = await global.html2canvas(renderSrc, {
+          backgroundColor: '#ffffff',
+          scale: 1.5,
+          useCORS: true,
+          allowTaint: true,
+          windowWidth: Math.ceil(renderSrc.scrollWidth || renderSrc.offsetWidth || 900),
+          windowHeight: Math.ceil(renderSrc.scrollHeight || renderSrc.offsetHeight || 1200),
+        });
+        renderedCanvas = __trimCanvasWhitespace(renderedCanvas, 48);
+        __splitTallCanvas(renderedCanvas).forEach(function (part) {
+          renderedPages.push(part);
+        });
+      }
+      const indices = [];
+      for (var ri = 1; ri <= renderedPages.length; ri++) indices.push(ri);
+      const totalSheets = Math.ceil(indices.length / cap);
+      const sheetCount = Math.min(40, totalSheets);
+      const sheetSize = __previewSheetSize(settings.orientation, layoutPages);
+      const pixelRatio = __previewPixelRatio();
+      const pad = 6;
+      const cellW = Math.floor((sheetSize.width - pad * (grid.cols + 1)) / grid.cols);
+      const cellH = Math.floor((sheetSize.height - pad * (grid.rows + 1)) / grid.rows);
+      const previews = [];
+
+      for (var s = 0; s < sheetCount; s++) {
+        const chunk = [];
+        for (var c = 0; c < cap; c++) {
+          const idx = s * cap + c;
+          if (idx < indices.length) chunk.push(indices[idx]);
+        }
+        if (!chunk.length) break;
+        var useRepeatFill =
+          layoutPages > 1 &&
+          chunk.length === 1 &&
+          cap > 1 &&
+          indices.length === 1;
+        var drawCount = useRepeatFill ? cap : chunk.length;
+        const sheetParts = __createPreviewSheetCanvas(sheetSize.width, sheetSize.height, pixelRatio);
+        const sheet = sheetParts.canvas;
+        const sctx = sheetParts.ctx;
+        sctx.fillStyle = '#ffffff';
+        sctx.fillRect(0, 0, sheetSize.width, sheetSize.height);
+
+        for (var k = 0; k < drawCount; k++) {
+          var pnum = useRepeatFill ? chunk[0] : chunk[k];
+          if (signal && signal.aborted) {
+            throw new global.DOMException('Aborted', 'AbortError');
+          }
+          var pageCanvas = renderedPages[pnum - 1];
+          if (!pageCanvas) continue;
+          if (isBw) __applyGrayscaleCanvas(pageCanvas);
+          var row = Math.floor(k / grid.cols);
+          var col = k % grid.cols;
+          var x = pad + col * (cellW + pad);
+          var y = pad + row * (cellH + pad);
+          __drawContained(sctx, pageCanvas, x, y, cellW, cellH);
+        }
+        previews.push(sheet.toDataURL('image/jpeg', 0.94));
+      }
+
+      return {
+        success: true,
+        preview_source: 'docx',
+        previews: previews,
+        total_pages: totalSheets < 1 ? 1 : totalSheets,
+        total_document_pages: renderedPages.length || pageEls.length,
+        selected_document_pages: renderedPages.length,
+        layout_pages: layoutPages,
+        color_sheets: 0,
+        bw_sheets: 0,
+        total_amount: 0,
+        page_range_warning: null,
+      };
+    } finally {
+      try {
+        if (host.parentNode) host.parentNode.removeChild(host);
+      } catch (e) {
+        /* ignore */
+      }
+    }
+  }
+
   async function __renderPdfToPreviews(pdfData, oneBasedIndices, opt) {
     if (!global.pdfjsLib) {
       throw new Error('PDF preview library not loaded');
@@ -487,9 +753,9 @@
     const orientation = settings.orientation || 'Portrait';
     const layoutPages = Math.max(1, parseInt(String(settings.layout_pages || 1), 10) || 1);
     const isBw = (colorMode + '').toLowerCase().indexOf('black') >= 0;
-    const extraRot = (orientation + '') === 'Landscape' ? 90 : 0;
     const grid = __layoutGrid(layoutPages);
     const sheetCapacity = grid.rows * grid.cols;
+    const sheetSize = __previewSheetSize(orientation, layoutPages);
 
     var pdf = pdfData;
     if (!pdf || typeof pdf.getPage !== 'function') {
@@ -501,9 +767,10 @@
     const indices = oneBasedIndices.slice();
     const totalSheets = Math.ceil(indices.length / sheetCapacity);
     const sheetCount = Math.min(maxSheets, totalSheets);
-    const pad = 4;
-    const baseCellW = 420;
-    const baseCellH = 594;
+    const pad = 6;
+    const baseCellW = sheetSize.width;
+    const baseCellH = sheetSize.height;
+    const pixelRatio = __previewPixelRatio();
 
     for (var s = 0; s < sheetCount; s++) {
       const chunk = [];
@@ -515,12 +782,11 @@
 
       const cellW = Math.floor((baseCellW - pad * (grid.cols + 1)) / grid.cols);
       const cellH = Math.floor((baseCellH - pad * (grid.rows + 1)) / grid.rows);
-      const sheet = global.document.createElement('canvas');
-      const sctx = sheet.getContext('2d');
-      sheet.width = baseCellW;
-      sheet.height = baseCellH;
+      const sheetParts = __createPreviewSheetCanvas(baseCellW, baseCellH, pixelRatio);
+      const sheet = sheetParts.canvas;
+      const sctx = sheetParts.ctx;
       sctx.fillStyle = '#ffffff';
-      sctx.fillRect(0, 0, sheet.width, sheet.height);
+      sctx.fillRect(0, 0, baseCellW, baseCellH);
 
       // Single source page (e.g. one image, or page range selecting only one page):
       // fill every cell of the N-up grid with repeats so the preview matches
@@ -538,13 +804,13 @@
         var page = await pdf.getPage(pnum);
         var row = Math.floor(k / grid.cols);
         var col = k % grid.cols;
-        var cellCanvas = await __renderPageFitted(page, cellW, cellH, extraRot);
+        var cellCanvas = await __renderPageFitted(page, cellW * pixelRatio, cellH * pixelRatio);
         if (isBw) __applyGrayscaleCanvas(cellCanvas);
         var x = pad + col * (cellW + pad);
         var y = pad + row * (cellH + pad);
-        sctx.drawImage(cellCanvas, x, y, cellW, cellH);
+        __drawContained(sctx, cellCanvas, x, y, cellW, cellH);
       }
-      urls.push(sheet.toDataURL('image/jpeg', 0.82));
+      urls.push(sheet.toDataURL('image/jpeg', 0.94));
     }
 
     return {
@@ -566,15 +832,21 @@
       ((file.type || '').toLowerCase().indexOf('image/') === 0 &&
         !/\.(pdf|docx?)$/i.test(name));
     const isDocx = /\.docx$/i.test(name);
+    const isDoc = /\.doc$/i.test(name);
     const ps = printSettings || {};
+
+    if (isDoc) {
+      throw new Error('Preview is available for DOCX and PDF files. Please save this Word file as .docx to preview it here.');
+    }
+
+    if (isDocx) {
+      return __docxToImagePreviews(file, pageRangeVal, ps, signal);
+    }
 
     var uintData;
     if (isImg) {
-      const ab0 = await __rasterFileToPdfBytes(file, signal);
+      const ab0 = await __rasterFileToPdfBytes(file, signal, ps);
       uintData = new Uint8Array(ab0);
-    } else if (isDocx) {
-      const ab1 = await __docxToPdfBytes(file, signal);
-      uintData = new Uint8Array(ab1);
     } else {
       const buf = await file.arrayBuffer();
       if (signal && signal.aborted) throw new global.DOMException('Aborted', 'AbortError');
