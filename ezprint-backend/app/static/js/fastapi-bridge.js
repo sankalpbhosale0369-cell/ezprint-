@@ -205,6 +205,28 @@
     return global.pdfjsLib.getDocument(base).promise;
   }
 
+  async function __officeFileToPdfBytes(file, signal) {
+    const t = encodeURIComponent(await global.__ezprintEnsureToken());
+    const fd = new global.FormData();
+    fd.append('file', file, file.name || 'document.docx');
+    const res = await global.fetch('/api/v1/preview/office-to-pdf?t=' + t, {
+      method: 'POST',
+      body: fd,
+      signal: signal,
+    });
+    if (!res.ok) {
+      var detail = '';
+      try {
+        var err = await res.json();
+        detail = typeof err.detail === 'string' ? err.detail : '';
+      } catch (e) {
+        detail = await res.text().catch(function () { return ''; });
+      }
+      throw new Error(detail || ('Document preview conversion failed: HTTP ' + res.status));
+    }
+    return res.arrayBuffer();
+  }
+
   function __layoutGrid(n) {
     const v = Math.max(1, parseInt(String(n), 10) || 1);
     switch (v) {
@@ -257,18 +279,18 @@
    * @param {import('pdfjs-dist').PDFPageProxy} page
    * @param {number} maxW
    * @param {number} maxH
-   * @param {number} rotation optional explicit page rotation
+   * @param {number} extraRotation optional extra page rotation
    */
-  function __renderPageFitted(page, maxW, maxH, rotation) {
+  function __renderPageFitted(page, maxW, maxH, extraRotation) {
     const viewportArgs = { scale: 1 };
-    if (typeof rotation === 'number' && !isNaN(rotation)) {
-      viewportArgs.rotation = rotation;
+    if (typeof extraRotation === 'number' && !isNaN(extraRotation)) {
+      viewportArgs.rotation = ((page.rotate || 0) + extraRotation) % 360;
     }
     const base = page.getViewport(viewportArgs);
     const sc = Math.min(maxW / base.width, maxH / base.height, 4);
     const renderArgs = { scale: sc };
-    if (typeof rotation === 'number' && !isNaN(rotation)) {
-      renderArgs.rotation = rotation;
+    if (typeof extraRotation === 'number' && !isNaN(extraRotation)) {
+      renderArgs.rotation = ((page.rotate || 0) + extraRotation) % 360;
     }
     const vp = page.getViewport(renderArgs);
     const canvas = global.document.createElement('canvas');
@@ -289,83 +311,6 @@
     const drawX = x + (maxW - drawW) / 2;
     const drawY = y + (maxH - drawH) / 2;
     ctx.drawImage(sourceCanvas, drawX, drawY, drawW, drawH);
-  }
-
-  function __trimCanvasWhitespace(canvas, padding) {
-    const w = canvas.width || 0;
-    const h = canvas.height || 0;
-    if (w < 2 || h < 2) return canvas;
-    const ctx = canvas.getContext('2d');
-    const data = ctx.getImageData(0, 0, w, h).data;
-    var minX = w;
-    var minY = h;
-    var maxX = -1;
-    var maxY = -1;
-    const step = Math.max(1, Math.floor(Math.max(w, h) / 1200));
-    for (var y = 0; y < h; y += step) {
-      for (var x = 0; x < w; x += step) {
-        var i = (y * w + x) * 4;
-        var a = data[i + 3];
-        var r = data[i];
-        var g = data[i + 1];
-        var b = data[i + 2];
-        if (a > 12 && (r < 245 || g < 245 || b < 245)) {
-          if (x < minX) minX = x;
-          if (y < minY) minY = y;
-          if (x > maxX) maxX = x;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-    if (maxX < minX || maxY < minY) return canvas;
-    const pad = Math.max(0, padding || 0);
-    minX = Math.max(0, minX - pad);
-    minY = Math.max(0, minY - pad);
-    maxX = Math.min(w - 1, maxX + pad);
-    maxY = Math.min(h - 1, maxY + pad);
-    var cropW = maxX - minX + 1;
-    var cropH = maxY - minY + 1;
-    const targetAspect = 210 / 297;
-    const cropAspect = cropW / cropH;
-    if (cropAspect < targetAspect) {
-      var wantedW = Math.min(w, Math.ceil(cropH * targetAspect));
-      var extraW = wantedW - cropW;
-      minX = Math.max(0, minX - Math.floor(extraW / 2));
-      maxX = Math.min(w - 1, minX + wantedW - 1);
-      minX = Math.max(0, maxX - wantedW + 1);
-    } else if (cropAspect > targetAspect) {
-      var wantedH = Math.min(h, Math.ceil(cropW / targetAspect));
-      var extraH = wantedH - cropH;
-      minY = Math.max(0, minY - Math.floor(extraH / 2));
-      maxY = Math.min(h - 1, minY + wantedH - 1);
-      minY = Math.max(0, maxY - wantedH + 1);
-    }
-    cropW = maxX - minX + 1;
-    cropH = maxY - minY + 1;
-    if (cropW >= w * 0.92 && cropH >= h * 0.92) return canvas;
-    const out = global.document.createElement('canvas');
-    out.width = cropW;
-    out.height = cropH;
-    out.getContext('2d').drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
-    return out;
-  }
-
-  function __splitTallCanvas(canvas) {
-    const w = canvas.width || 0;
-    const h = canvas.height || 0;
-    if (w < 1 || h < 1) return [];
-    const a4SliceH = Math.max(1, Math.round((w * 297) / 210));
-    if (h <= a4SliceH * 1.25) return [canvas];
-    const out = [];
-    for (var y = 0; y < h; y += a4SliceH) {
-      var partH = Math.min(a4SliceH, h - y);
-      var c = global.document.createElement('canvas');
-      c.width = w;
-      c.height = partH;
-      c.getContext('2d').drawImage(canvas, 0, y, w, partH, 0, 0, w, partH);
-      out.push(c);
-    }
-    return out;
   }
 
   /**
@@ -451,299 +396,6 @@
     return pdfDoc.save();
   }
 
-  /**
-   * .docx → multi-page A4 PDF using mammoth (HTML) + html2canvas + pdf-lib.
-   */
-  async function __docxToPdfBytes(file, signal) {
-    if (signal && signal.aborted) {
-      throw new global.DOMException('Aborted', 'AbortError');
-    }
-    if (!global.mammoth) {
-      throw new Error('Word document preview (mammoth) not loaded');
-    }
-    if (!global.html2canvas) {
-      throw new Error('Document renderer (html2canvas) not loaded');
-    }
-    if (!global.PDFLib || !global.PDFLib.PDFDocument) {
-      throw new Error('PDF library not loaded');
-    }
-    const { PDFDocument } = global.PDFLib;
-    const buf = await file.arrayBuffer();
-    if (signal && signal.aborted) {
-      throw new global.DOMException('Aborted', 'AbortError');
-    }
-    const result = await global.mammoth.convertToHtml({ arrayBuffer: buf });
-    const html = (result && result.value) ? String(result.value) : '';
-    const wrap = global.document.createElement('div');
-    wrap.id = 'ezprint-docx-temp';
-    wrap.setAttribute('aria-hidden', 'true');
-    wrap.style.cssText = [
-      'position:fixed', 'left:-9999px', 'top:0', 'width:420px',
-      'background:#fff', 'color:#111', 'box-sizing:border-box',
-      'padding:16px', 'font:12px/1.4 system-ui,-apple-system,Segoe UI,sans-serif',
-      'word-wrap:break-word', 'overflow:visible', 'z-index:0',
-    ].join(';');
-    var style = global.document.createElement('style');
-    style.textContent = 'table{max-width:100%;border-collapse:collapse;} img{max-width:100%;} p{margin:0 0 0.5em 0}';
-    wrap.appendChild(style);
-    var body = global.document.createElement('div');
-    if (html) {
-      body.innerHTML = html;
-    } else {
-      body.textContent = ' ';
-    }
-    wrap.appendChild(body);
-    global.document.body.appendChild(wrap);
-    if (signal && signal.aborted) {
-      try {
-        global.document.body.removeChild(wrap);
-      } catch (e) {
-        /* ignore */
-      }
-      throw new global.DOMException('Aborted', 'AbortError');
-    }
-    var h2cOpts = {
-      backgroundColor: '#ffffff',
-      scale: 1,
-      useCORS: true,
-      allowTaint: true,
-    };
-    var big;
-    try {
-      big = await global.html2canvas(wrap, h2cOpts);
-    } finally {
-      try {
-        if (wrap.parentNode) {
-          global.document.body.removeChild(wrap);
-        }
-      } catch (e) {
-        /* ignore */
-      }
-    }
-    if (signal && signal.aborted) {
-      throw new global.DOMException('Aborted', 'AbortError');
-    }
-    if (!big || big.width < 1 || big.height < 1) {
-      const pdf0 = await PDFDocument.create();
-      pdf0.addPage([595, 842]);
-      return pdf0.save();
-    }
-    const sliceW = big.width;
-    const sliceH = Math.max(1, Math.round((sliceW * 297) / 210));
-    const pdfOut = await PDFDocument.create();
-    for (var y0 = 0, pi = 0; y0 < big.height; y0 += sliceH) {
-      if (pi > 200) {
-        break;
-      }
-      var hPart = global.Math.min(sliceH, big.height - y0);
-      var cPart = global.document.createElement('canvas');
-      cPart.width = sliceW;
-      cPart.height = hPart;
-      cPart.getContext('2d').drawImage(
-        big,
-        0,
-        y0,
-        sliceW,
-        hPart,
-        0,
-        0,
-        sliceW,
-        hPart
-      );
-      var pbytes = await new global.Promise(function (resolve) {
-        cPart.toBlob(
-          function (b) {
-            if (!b) {
-              resolve(new global.Uint8Array(0));
-              return;
-            }
-            b.arrayBuffer().then(function (ab) {
-              resolve(new global.Uint8Array(ab));
-            });
-          },
-          'image/png',
-          0.92
-        );
-      });
-      if (!pbytes || pbytes.length < 8) {
-        break;
-      }
-      var eimg;
-      try {
-        eimg = await pdfOut.embedPng(pbytes);
-      } catch (e) {
-        break;
-      }
-      const pageW = 595;
-      const pageH = 842;
-      const m = 20;
-      const aw = pageW - 2 * m;
-      const ah = pageH - 2 * m;
-      const s = global.Math.min(aw / eimg.width, ah / eimg.height);
-      const dw = eimg.width * s;
-      const dh = eimg.height * s;
-      const x = (pageW - dw) / 2;
-      const y = (pageH - dh) / 2;
-      const pgN = pdfOut.addPage([pageW, pageH]);
-      pgN.drawImage(eimg, { x: x, y: y, width: dw, height: dh });
-      pi++;
-    }
-    if (pi === 0) {
-      const pdf1 = await PDFDocument.create();
-      pdf1.addPage([595, 842]);
-      return pdf1.save();
-    }
-    if (signal && signal.aborted) {
-      throw new global.DOMException('Aborted', 'AbortError');
-    }
-    return pdfOut.save();
-  }
-
-  function __cloneElementMarkup(el) {
-    var holder = global.document.createElement('div');
-    holder.appendChild(el.cloneNode(true));
-    return holder.innerHTML;
-  }
-
-  async function __docxToImagePreviews(file, pageRangeVal, settings, signal) {
-    if (signal && signal.aborted) {
-      throw new global.DOMException('Aborted', 'AbortError');
-    }
-    if (!global.docx || typeof global.docx.renderAsync !== 'function') {
-      throw new Error('Word document preview renderer not loaded');
-    }
-    if (!global.html2canvas) {
-      throw new Error('Document renderer not loaded');
-    }
-
-    const buf = await file.arrayBuffer();
-    const host = global.document.createElement('div');
-    host.id = 'ezprint-docx-direct-temp';
-    host.setAttribute('aria-hidden', 'true');
-    host.style.cssText = [
-      'position:fixed', 'left:-12000px', 'top:0',
-      'width:900px', 'height:auto', 'background:#fff',
-      'z-index:0', 'overflow:visible',
-    ].join(';');
-    global.document.body.appendChild(host);
-    try {
-      await global.docx.renderAsync(buf, host, host, {
-        className: 'docx',
-        inWrapper: true,
-        ignoreWidth: false,
-        ignoreHeight: false,
-        ignoreFonts: false,
-        breakPages: true,
-        experimental: true,
-      });
-      if (signal && signal.aborted) {
-        throw new global.DOMException('Aborted', 'AbortError');
-      }
-      var pageEls = Array.prototype.slice.call(
-        host.querySelectorAll('.docx-wrapper > section.docx, .docx-wrapper > section, section.docx, section')
-      ).filter(function (el) {
-        return (el.offsetWidth > 0 && el.offsetHeight > 0) ||
-          el.textContent.trim() ||
-          el.querySelector('img,table,svg,canvas');
-      });
-      if (!pageEls.length) {
-        pageEls = [host];
-      }
-      const layoutPages = Math.max(1, parseInt(String(settings.layout_pages || 1), 10) || 1);
-      const colorMode = settings.color_mode || 'Color';
-      const isBw = (colorMode + '').toLowerCase().indexOf('black') >= 0;
-      const grid = __layoutGrid(layoutPages);
-      const cap = grid.rows * grid.cols;
-      const renderedPages = [];
-      const sourceIndices = __parsePageIndices(pageRangeVal, pageEls.length);
-      for (var rp = 0; rp < sourceIndices.length; rp++) {
-        if (signal && signal.aborted) {
-          throw new global.DOMException('Aborted', 'AbortError');
-        }
-        var renderSrc = pageEls[sourceIndices[rp] - 1];
-        if (!renderSrc) continue;
-        var renderedCanvas = await global.html2canvas(renderSrc, {
-          backgroundColor: '#ffffff',
-          scale: 1.5,
-          useCORS: true,
-          allowTaint: true,
-          windowWidth: Math.ceil(renderSrc.scrollWidth || renderSrc.offsetWidth || 900),
-          windowHeight: Math.ceil(renderSrc.scrollHeight || renderSrc.offsetHeight || 1200),
-        });
-        renderedCanvas = __trimCanvasWhitespace(renderedCanvas, 48);
-        __splitTallCanvas(renderedCanvas).forEach(function (part) {
-          renderedPages.push(part);
-        });
-      }
-      const indices = [];
-      for (var ri = 1; ri <= renderedPages.length; ri++) indices.push(ri);
-      const totalSheets = Math.ceil(indices.length / cap);
-      const sheetCount = Math.min(40, totalSheets);
-      const sheetSize = __previewSheetSize(settings.orientation, layoutPages);
-      const pixelRatio = __previewPixelRatio();
-      const pad = 6;
-      const cellW = Math.floor((sheetSize.width - pad * (grid.cols + 1)) / grid.cols);
-      const cellH = Math.floor((sheetSize.height - pad * (grid.rows + 1)) / grid.rows);
-      const previews = [];
-
-      for (var s = 0; s < sheetCount; s++) {
-        const chunk = [];
-        for (var c = 0; c < cap; c++) {
-          const idx = s * cap + c;
-          if (idx < indices.length) chunk.push(indices[idx]);
-        }
-        if (!chunk.length) break;
-        var useRepeatFill =
-          layoutPages > 1 &&
-          chunk.length === 1 &&
-          cap > 1 &&
-          indices.length === 1;
-        var drawCount = useRepeatFill ? cap : chunk.length;
-        const sheetParts = __createPreviewSheetCanvas(sheetSize.width, sheetSize.height, pixelRatio);
-        const sheet = sheetParts.canvas;
-        const sctx = sheetParts.ctx;
-        sctx.fillStyle = '#ffffff';
-        sctx.fillRect(0, 0, sheetSize.width, sheetSize.height);
-
-        for (var k = 0; k < drawCount; k++) {
-          var pnum = useRepeatFill ? chunk[0] : chunk[k];
-          if (signal && signal.aborted) {
-            throw new global.DOMException('Aborted', 'AbortError');
-          }
-          var pageCanvas = renderedPages[pnum - 1];
-          if (!pageCanvas) continue;
-          if (isBw) __applyGrayscaleCanvas(pageCanvas);
-          var row = Math.floor(k / grid.cols);
-          var col = k % grid.cols;
-          var x = pad + col * (cellW + pad);
-          var y = pad + row * (cellH + pad);
-          __drawContained(sctx, pageCanvas, x, y, cellW, cellH);
-        }
-        previews.push(sheet.toDataURL('image/jpeg', 0.94));
-      }
-
-      return {
-        success: true,
-        preview_source: 'docx',
-        previews: previews,
-        total_pages: totalSheets < 1 ? 1 : totalSheets,
-        total_document_pages: renderedPages.length || pageEls.length,
-        selected_document_pages: renderedPages.length,
-        layout_pages: layoutPages,
-        color_sheets: 0,
-        bw_sheets: 0,
-        total_amount: 0,
-        page_range_warning: null,
-      };
-    } finally {
-      try {
-        if (host.parentNode) host.parentNode.removeChild(host);
-      } catch (e) {
-        /* ignore */
-      }
-    }
-  }
-
   async function __renderPdfToPreviews(pdfData, oneBasedIndices, opt) {
     if (!global.pdfjsLib) {
       throw new Error('PDF preview library not loaded');
@@ -753,6 +405,7 @@
     const orientation = settings.orientation || 'Portrait';
     const layoutPages = Math.max(1, parseInt(String(settings.layout_pages || 1), 10) || 1);
     const isBw = (colorMode + '').toLowerCase().indexOf('black') >= 0;
+    const extraRot = String(orientation || 'Portrait') === 'Landscape' ? 90 : undefined;
     const grid = __layoutGrid(layoutPages);
     const sheetCapacity = grid.rows * grid.cols;
     const sheetSize = __previewSheetSize(orientation, layoutPages);
@@ -804,7 +457,7 @@
         var page = await pdf.getPage(pnum);
         var row = Math.floor(k / grid.cols);
         var col = k % grid.cols;
-        var cellCanvas = await __renderPageFitted(page, cellW * pixelRatio, cellH * pixelRatio);
+        var cellCanvas = await __renderPageFitted(page, cellW * pixelRatio, cellH * pixelRatio, extraRot);
         if (isBw) __applyGrayscaleCanvas(cellCanvas);
         var x = pad + col * (cellW + pad);
         var y = pad + row * (cellH + pad);
@@ -835,18 +488,13 @@
     const isDoc = /\.doc$/i.test(name);
     const ps = printSettings || {};
 
-    if (isDoc) {
-      throw new Error('Preview is available for DOCX and PDF files. Please save this Word file as .docx to preview it here.');
-    }
-
-    if (isDocx) {
-      return __docxToImagePreviews(file, pageRangeVal, ps, signal);
-    }
-
     var uintData;
     if (isImg) {
       const ab0 = await __rasterFileToPdfBytes(file, signal, ps);
       uintData = new Uint8Array(ab0);
+    } else if (isDoc || isDocx) {
+      const ab1 = await __officeFileToPdfBytes(file, signal);
+      uintData = new Uint8Array(ab1);
     } else {
       const buf = await file.arrayBuffer();
       if (signal && signal.aborted) throw new global.DOMException('Aborted', 'AbortError');
