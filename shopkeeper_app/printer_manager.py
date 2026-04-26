@@ -144,6 +144,9 @@ class PrinterManager:
           resolve through the agent-token presigned URL (authoritative path
           on the new backend).
         """
+        if file_path and os.path.exists(file_path):
+            return file_path
+
         # Preferred path on the new SaaS backend: resolve presigned URL by ID.
         if job_id and self.api_client is not None:
             temp_dir = os.path.join(tempfile.gettempdir(), 'ezprint_downloads')

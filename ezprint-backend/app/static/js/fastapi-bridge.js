@@ -139,6 +139,90 @@
     return { job_id: jobId, finalize: out };
   };
 
+  global.__ezprintSubmitDocuments = async function (documents, options) {
+    const t = encodeURIComponent(await global.__ezprintEnsureToken());
+    const items = Array.isArray(documents) ? documents : [];
+    if (!items.length) throw new Error('No documents selected');
+
+    const body = {
+      customer_name: options && options.customer_name || null,
+      customer_phone: options && options.customer_phone || null,
+      files: items.map(function (doc) {
+        const file = doc.file;
+        const settings = doc.settings || {};
+        const ext = (file.name.split('.').pop() || 'pdf').toLowerCase().replace(/^\./, '');
+        const layoutPages = parseInt(String(settings.layout_pages), 10) || 1;
+        return {
+          filename: file.name,
+          file_type: ext,
+          file_size: file.size,
+          copies: parseInt(String(settings.copies), 10) || 1,
+          page_size: settings.page_size || 'A4',
+          orientation: settings.orientation || 'Portrait',
+          print_side: settings.print_side || 'Single',
+          color_mode: settings.color_mode || 'Black & White',
+          layout_pages: layoutPages,
+          layout_type: settings.layout_type || layoutTypeFromSelect(layoutPages),
+          page_range: settings.page_range || null,
+        };
+      }),
+    };
+
+    const createRes = await global.fetch('/api/v1/jobs?t=' + t, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!createRes.ok) {
+      const e = await createRes.json().catch(function () { return ({}); });
+      throw new Error(
+        (typeof e.detail === 'string' ? e.detail : null) ||
+          ('Create job failed: ' + createRes.status)
+      );
+    }
+    const created = await createRes.json();
+    const jobId = created.job_id;
+    const slots = created.files || [];
+    if (slots.length !== items.length) {
+      throw new Error('Backend returned an unexpected upload manifest');
+    }
+
+    for (let i = 0; i < items.length; i += 1) {
+      const slot = slots[i];
+      const file = items[i].file;
+      await new Promise(function (resolve, reject) {
+        const fd = new global.FormData();
+        fd.append('file', file, file.name);
+        const xhr = new global.XMLHttpRequest();
+        xhr.open(
+          'POST',
+          '/api/v1/jobs/' + encodeURIComponent(jobId) +
+            '/files/' + encodeURIComponent(slot.file_id) + '/upload?t=' + t
+        );
+        xhr.onload = function () {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else reject(new Error('Upload failed: ' + xhr.status + ' ' + xhr.responseText.slice(0, 200)));
+        };
+        xhr.onerror = function () { reject(new Error('Network error during upload')); };
+        xhr.send(fd);
+      });
+    }
+
+    const fin = await global.fetch(
+      '/api/v1/jobs/' + encodeURIComponent(jobId) + '/finalize?t=' + t,
+      { method: 'POST' }
+    );
+    if (!fin.ok) {
+      const e = await fin.json().catch(function () { return ({}); });
+      throw new Error(
+        (typeof e.detail === 'string' ? e.detail : null) ||
+          ('Finalize failed: ' + fin.status)
+      );
+    }
+    const out = await fin.json();
+    return { job_id: jobId, finalize: out };
+  };
+
   /** @returns {Promise<{ job_id: string, status: string, amount?: number }>} */
   global.__ezprintFetchJob = async function (jobId) {
     const t = encodeURIComponent(await global.__ezprintEnsureToken());

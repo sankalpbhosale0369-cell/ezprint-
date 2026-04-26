@@ -139,6 +139,52 @@ class PrintJob(Base):
         Index("ix_print_jobs_created_at", "created_at"),
     )
 
+    files: Mapped[list["PrintJobFile"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="PrintJobFile.sort_order",
+    )
+
+
+class PrintJobFile(Base):
+    __tablename__ = "print_job_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    file_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False, default=_uuid)
+    print_job_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("print_jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    file_type: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    page_range: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    copies: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    page_size: Mapped[str] = mapped_column(String(20), default="A4", nullable=False)
+    orientation: Mapped[str] = mapped_column(String(20), default="Portrait", nullable=False)
+    print_side: Mapped[str] = mapped_column(String(20), default="Single", nullable=False)
+    color_mode: Mapped[str] = mapped_column(String(20), default="Black & White", nullable=False)
+    layout_pages: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    layout_type: Mapped[str] = mapped_column(String(20), default="normal", nullable=False)
+
+    total_pages: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    color_pages: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    uploaded_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    job: Mapped[PrintJob] = relationship(back_populates="files")
+
+    __table_args__ = (
+        UniqueConstraint("print_job_id", "sort_order", name="uq_print_job_files_order"),
+        Index("ix_print_job_files_tenant_job", "tenant_id", "print_job_id"),
+    )
+
 
 class Printer(Base):
     __tablename__ = "printers"

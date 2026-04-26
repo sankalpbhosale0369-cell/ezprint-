@@ -288,6 +288,7 @@ def migrate_schema():
                 columns_to_add.append(('cloudinary_public_id', 'VARCHAR(255)'))
             if 'preview_paths' not in existing_cols:
                 columns_to_add.append(('preview_paths', 'TEXT'))
+            if 'assets_deleted' not in existing_cols:
                 if dialect_name == 'postgresql':
                     columns_to_add.append(('assets_deleted', 'BOOLEAN DEFAULT FALSE'))
                 else:

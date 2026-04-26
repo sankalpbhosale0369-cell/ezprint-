@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.db import models
 from app.db.session import get_db
 from app.schemas.dashboard import DashboardKPIs, Period
-from app.schemas.jobs import JobSummary
+from app.schemas.jobs import JobDocumentSummary, JobSummary
 from app.tenancy.deps import Principal, require_shopkeeper_or_agent
 
 router = APIRouter()
@@ -34,6 +34,27 @@ def _period_start(period: Period) -> Optional[datetime]:
 
 
 def _job_to_summary(job: models.PrintJob) -> JobSummary:
+    files = [
+        JobDocumentSummary(
+            file_id=f.file_id,
+            filename=f.filename,
+            file_type=f.file_type,
+            file_size=f.file_size,
+            sort_order=f.sort_order,
+            copies=f.copies,
+            page_size=f.page_size,
+            orientation=f.orientation,
+            print_side=f.print_side,
+            color_mode=f.color_mode,
+            layout_pages=f.layout_pages,
+            layout_type=f.layout_type,
+            page_range=f.page_range,
+            total_pages=f.total_pages,
+            color_pages=f.color_pages,
+            amount=f.amount,
+        )
+        for f in sorted(job.files, key=lambda f: f.sort_order)
+    ]
     return JobSummary(
         job_id=job.job_id,
         filename=job.filename,
@@ -51,6 +72,8 @@ def _job_to_summary(job: models.PrintJob) -> JobSummary:
         created_at=job.created_at,
         started_at=job.started_at,
         completed_at=job.completed_at,
+        document_count=len(files) or 1,
+        files=files,
     )
 
 

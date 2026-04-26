@@ -12,7 +12,7 @@
     <script src="https://unpkg.com/cropperjs@1.5.13/dist/cropper.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-    <script src="/static/js/fastapi-bridge.js?v=9"></script>
+    <script src="/static/js/fastapi-bridge.js?v=10"></script>
 </head>
 
 <body>
@@ -879,12 +879,26 @@
                 font-size: 14px;
                 border-left: 4px solid #ef4444;
             }
+
+            .print-doc-item {
+                width: 100%;
+                border: 1px solid #e5e7eb;
+                background: #ffffff;
+                cursor: pointer;
+                text-align: left;
+                margin-top: 8px;
+            }
+
+            .print-doc-item.active {
+                border-color: #2563eb;
+                background: #eff6ff;
+            }
         </style>
 
 
     </div>
 
-    <script src="/static/js/customer.js?v=9"></script>
+    <script src="/static/js/customer.js?v=10"></script>
 </body>
 
 </html>

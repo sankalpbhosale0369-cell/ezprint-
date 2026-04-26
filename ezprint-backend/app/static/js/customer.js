@@ -27,6 +27,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // XEROX Scanner State
     let scannedPages = [];  // Array of {blob, thumbnail, id}
+    let xeroxDocuments = [];
+    let xeroxDocumentIdCounter = 0;
     let cameraStream = null;
     let currentCaptureBlob = null;
     let scannerPageIdCounter = 0;
@@ -182,6 +184,9 @@ document.addEventListener('DOMContentLoaded', function () {
     let currentZoom = 1;
     let currentRotation = 0;
     let currentFile = null;
+    let printDocuments = [];
+    let activePrintDocumentId = null;
+    let printDocumentIdCounter = 0;
     let previewTimeout = null;
     let currentJobId = null;
     let statusCheckInterval = null;
@@ -243,76 +248,92 @@ document.addEventListener('DOMContentLoaded', function () {
         const files = Array.from(e.target.files);  // ← All selected files
 
         if (files.length === 0) return;
-
-        // Check if all files are images
-        const imageFiles = files.filter(f =>
-            f.type.startsWith('image/') ||
-            /\.(png|jpe?g|gif|bmp|tiff?|webp)$/i.test(f.name)
-        );
-
-        // If multiple images, combine into PDF
-        if (imageFiles.length > 1) {
-            console.log(`Combining ${imageFiles.length} images into PDF...`);
-
-            // Show loading
-            if (fileInfo) {
-                fileInfo.innerHTML = `<div class="loading">Combining ${imageFiles.length} images...</div>`;
-            }
-
-            try {
-                // Reuse XEROX PDF combination logic
-                const pdfBlob = await combineImagesToPDFForPrint(imageFiles);
-                const pdfFile = new File([pdfBlob], `combined_${Date.now()}.pdf`, { type: 'application/pdf' });
-
-                currentFile = pdfFile;
-
-                // Update UI
-                if (fileInfo) {
-                    fileInfo.innerHTML = `
-                        <div class="file-selected">
-                            <i class="fas fa-file-pdf"></i>
-                            <span>${imageFiles.length} images combined into PDF</span>
-                            <span class="file-size">${(pdfFile.size / (1024 * 1024)).toFixed(2)} MB</span>
-                        </div>
-                    `;
-                }
-
-                // Enable buttons
-                previewBtn.disabled = false;
-                uploadBtn.disabled = false;
-
-                // Auto-preview
-                setTimeout(() => generatePreview(true), 500);
-
-            } catch (error) {
-                console.error('PDF combination failed:', error);
-                alert('Failed to combine images. Please try again.');
-                return;
-            }
-
-        } else {
-            // Single file - use as-is
-            currentFile = files[0];
-
-            // Show file info (existing code)
-            if (fileInfo) {
-                fileInfo.innerHTML = `
-                    <div class="file-selected">
-                        <i class="fas fa-file"></i>
-                        <span>${currentFile.name}</span>
-                        <span class="file-size">${(currentFile.size / (1024 * 1024)).toFixed(2)} MB</span>
-                    </div>
-                `;
-            }
-
-            // Enable buttons
-            previewBtn.disabled = false;
-            uploadBtn.disabled = false;
-
-            // Auto-preview
-            setTimeout(() => generatePreview(true), 500);
-        }
+        setPrintDocuments(files.map(file => createPrintDocument(file)));
+        renderPrintDocuments();
+        applyActiveDocumentSettings();
+        previewBtn.disabled = false;
+        uploadBtn.disabled = false;
+        setTimeout(() => generatePreview(true), 500);
     });
+
+    function getCurrentPrintSettings() {
+        const lp = parseInt(layoutPages && layoutPages.value, 10) || 1;
+        return {
+            copies: parseInt(copies && copies.value, 10) || 1,
+            page_range: (pageRangeInput && pageRangeInput.value || '').trim(),
+            page_size: pageSize ? pageSize.value : 'A4',
+            orientation: orientation ? orientation.value : 'Portrait',
+            print_side: printSide ? printSide.value : 'Single',
+            color_mode: colorMode ? colorMode.value : 'Black & White',
+            layout_pages: lp,
+            layout_type: __ezprintLayoutType(String(lp)),
+        };
+    }
+
+    function createPrintDocument(file, settings) {
+        return {
+            id: 'doc_' + (++printDocumentIdCounter),
+            file,
+            settings: Object.assign({}, getCurrentPrintSettings(), settings || {}),
+            pageCount: 0,
+            previewAmountBase: null,
+        };
+    }
+
+    function getActivePrintDocument() {
+        return printDocuments.find(doc => doc.id === activePrintDocumentId) || printDocuments[0] || null;
+    }
+
+    function saveActiveDocumentSettings() {
+        const doc = getActivePrintDocument();
+        if (!doc) return;
+        doc.settings = getCurrentPrintSettings();
+        currentFile = doc.file;
+    }
+
+    function setPrintDocuments(docs) {
+        printDocuments = docs;
+        activePrintDocumentId = docs.length ? docs[0].id : null;
+        currentFile = docs.length ? docs[0].file : null;
+    }
+
+    function renderPrintDocuments() {
+        if (!fileInfo) return;
+        if (!printDocuments.length) {
+            fileInfo.innerHTML = '';
+            return;
+        }
+        fileInfo.innerHTML = printDocuments.map((doc, index) => `
+            <button type="button" class="file-selected print-doc-item ${doc.id === activePrintDocumentId ? 'active' : ''}" data-doc-id="${doc.id}">
+                <i class="fas fa-file"></i>
+                <span>${index + 1}. ${doc.file.name}</span>
+                <span class="file-size">${(doc.file.size / (1024 * 1024)).toFixed(2)} MB</span>
+            </button>
+        `).join('');
+        fileInfo.querySelectorAll('[data-doc-id]').forEach(btn => {
+            btn.addEventListener('click', function () {
+                saveActiveDocumentSettings();
+                activePrintDocumentId = this.getAttribute('data-doc-id');
+                applyActiveDocumentSettings();
+                renderPrintDocuments();
+                generatePreview(true);
+            });
+        });
+    }
+
+    function applyActiveDocumentSettings() {
+        const doc = getActivePrintDocument();
+        if (!doc) return;
+        currentFile = doc.file;
+        const s = doc.settings || {};
+        if (copies) copies.value = s.copies || 1;
+        if (pageRangeInput) pageRangeInput.value = s.page_range || '';
+        if (pageSize) pageSize.value = s.page_size || 'A4';
+        if (orientation) orientation.value = s.orientation || 'Portrait';
+        if (printSide) printSide.value = s.print_side || 'Single';
+        if (colorMode) colorMode.value = s.color_mode || 'Black & White';
+        if (layoutPages) layoutPages.value = String(s.layout_pages || 1);
+    }
 
     /**
      * Combine multiple images into a single PDF (for PRINT multi-file upload)
@@ -806,6 +827,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // Update price display for upload form
     function updatePriceDisplay() {
         if (!currentFile && currentMode !== 'xerox') return;
+        saveActiveDocumentSettings();
 
         // BILLING FIX: Use effective sheet count for price calculation if layout is applied
         let pageCount = currentPageCount || 0;
@@ -825,7 +847,25 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        const price = calculatePrice(pageCount, colorModeVal, printSideVal, copiesVal);
+        let price = calculatePrice(pageCount, colorModeVal, printSideVal, copiesVal);
+        if (currentMode !== 'xerox' && printDocuments.length > 1) {
+            let total = 0;
+            printDocuments.forEach(doc => {
+                const s = doc.settings || {};
+                const pages = doc.id === activePrintDocumentId ? pageCount : (doc.pageCount || 0);
+                const base = doc.id === activePrintDocumentId ? backendTotalAmount : doc.previewAmountBase;
+                const oldBackend = backendTotalAmount;
+                backendTotalAmount = base;
+                total += calculatePrice(
+                    pages,
+                    s.color_mode || 'Black & White',
+                    s.print_side || 'Single',
+                    parseInt(s.copies, 10) || 1
+                ).total || 0;
+                backendTotalAmount = oldBackend;
+            });
+            price = Object.assign({}, price, { total });
+        }
 
         // Update upload form price display
         const uploadPriceInfo = document.getElementById('uploadPriceInfo');
@@ -1042,6 +1082,7 @@ document.addEventListener('DOMContentLoaded', function () {
             alert('Please select a file first');
             return;
         }
+        saveActiveDocumentSettings();
 
         // Show loading if requested
         if (showLoading && previewLoading) {
@@ -1106,6 +1147,11 @@ document.addEventListener('DOMContentLoaded', function () {
                     backendColorSheets = data.color_sheets;
                     backendBWSheets = data.bw_sheets;
                     previewSource = data.preview_source || '';
+                    const activeDoc = getActivePrintDocument();
+                    if (activeDoc) {
+                        activeDoc.pageCount = data.total_pages || 0;
+                        activeDoc.previewAmountBase = backendTotalAmount;
+                    }
 
                     // PAGE RANGE FIX: Store filtered preview sheets based on page range
                     if (data.preview_type === 'html' && data.previews && Array.isArray(data.previews) && data.previews.length > 0) {
@@ -1377,6 +1423,43 @@ document.addEventListener('DOMContentLoaded', function () {
             xeroxLayoutPagesInput.addEventListener('change', schedulePreview);
         }
     }
+
+    function ensureXeroxAddDocumentButton() {
+        if (!xeroxSettingsSection || document.getElementById('xeroxAddDocumentBtn')) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = 'xeroxAddDocumentBtn';
+        btn.className = 'btn btn-secondary';
+        btn.textContent = 'Add Another Document';
+        btn.addEventListener('click', async function () {
+            if (!scannedPages.length) {
+                alert('Scan at least one page before adding another document.');
+                return;
+            }
+            try {
+                btn.disabled = true;
+                btn.textContent = 'Saving document...';
+                xeroxDocuments.push(await createXeroxDocumentFromCurrentPages());
+                scannedPages = [];
+                updateThumbnails();
+                previewReadyForPrint = false;
+                updatePreviewUIState();
+                if (previewSection) previewSection.style.display = 'none';
+                if (xeroxSettingsSection) xeroxSettingsSection.style.display = 'none';
+                if (xeroxScannerSection) xeroxScannerSection.style.display = 'block';
+                resetScannerUIState();
+                enableCamera();
+            } catch (error) {
+                alert('Could not add document: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Add Another Document';
+            }
+        });
+        const target = xeroxUploadBtn && xeroxUploadBtn.parentElement ? xeroxUploadBtn.parentElement : xeroxSettingsSection;
+        target.insertBefore(btn, xeroxUploadBtn || null);
+    }
+    ensureXeroxAddDocumentButton();
 
     // Setup auto-preview when DOM is ready
     setupXeroxAutoPreview();
@@ -1877,6 +1960,34 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function getXeroxPrintSettings() {
+        const xeroxPageRange = document.getElementById('xeroxPageRange');
+        const xeroxPageSize = document.getElementById('xeroxPageSize');
+        const xeroxOrientation = document.getElementById('xeroxOrientation');
+        const xeroxLayoutPages = document.getElementById('xeroxLayoutPages');
+        const lp = parseInt(xeroxLayoutPages && xeroxLayoutPages.value, 10) || 1;
+        return {
+            copies: parseInt(xeroxCopies && xeroxCopies.value, 10) || 1,
+            page_range: (xeroxPageRange && xeroxPageRange.value || '').trim(),
+            page_size: xeroxPageSize ? xeroxPageSize.value : 'A4',
+            orientation: xeroxOrientation ? xeroxOrientation.value : 'Portrait',
+            print_side: xeroxPrintSide ? xeroxPrintSide.value : 'Single',
+            color_mode: xeroxColorMode ? xeroxColorMode.value : 'Black & White',
+            layout_pages: lp,
+            layout_type: __ezprintLayoutType(String(lp)),
+        };
+    }
+
+    async function createXeroxDocumentFromCurrentPages() {
+        const pdfBlob = await convertScannedPagesToPDF();
+        const file = new File([pdfBlob], 'scanned_' + Date.now() + '.pdf', { type: 'application/pdf' });
+        return {
+            id: 'xerox_' + (++xeroxDocumentIdCounter),
+            file,
+            settings: getXeroxPrintSettings(),
+        };
+    }
+
     // Extract print job submission logic
     async function submitXeroxPrintJob() {
         // Double-submit guard
@@ -1894,26 +2005,25 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            const pdfBlob = await convertScannedPagesToPDF();
-            const upFile = new File([pdfBlob], 'scanned_' + Date.now() + '.pdf', { type: 'application/pdf' });
-            const lp = parseInt(document.getElementById('xeroxLayoutPages').value, 10) || 1;
+            const xeroxSettings = getXeroxPrintSettings();
+            const docsToSubmit = xeroxDocuments.slice();
+            docsToSubmit.push(await createXeroxDocumentFromCurrentPages());
 
             // Show loading
             xeroxUploadBtn.innerHTML = '<span class="loading"></span> Uploading...';
             xeroxUploadBtn.disabled = true;
 
-            const res = await __ezprintSubmitFile(upFile, {
-                copies: parseInt(document.getElementById('xeroxCopies').value, 10) || 1,
-                page_size: document.getElementById('xeroxPageSize').value,
-                orientation: document.getElementById('xeroxOrientation').value,
-                print_side: document.getElementById('xeroxPrintSide').value,
-                color_mode: document.getElementById('xeroxColorMode').value,
-                layout_pages: lp,
-                layout_type: __ezprintLayoutType(String(lp)),
-                page_range: prVal || null,
-                customer_name: null,
-                customer_phone: null,
-            });
+            const res = docsToSubmit.length > 1
+                ? await __ezprintSubmitDocuments(docsToSubmit, {
+                    customer_name: null,
+                    customer_phone: null,
+                })
+                : await __ezprintSubmitFile(docsToSubmit[0].file, {
+                    ...xeroxSettings,
+                    page_range: prVal || null,
+                    customer_name: null,
+                    customer_phone: null,
+                });
 
             currentJobId = res.job_id;
             showStatusSection();
@@ -1924,6 +2034,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (xeroxSettingsSection) xeroxSettingsSection.style.display = 'none';
 
             scannedPages = [];
+            xeroxDocuments = [];
             updateThumbnails();
 
             if (xeroxPreviewBtn) xeroxPreviewBtn.disabled = true;
@@ -1975,18 +2086,35 @@ document.addEventListener('DOMContentLoaded', function () {
 
         (async function () {
             try {
-                const res = await __ezprintSubmitFile(currentFile, {
-                    copies: parseInt(copies.value, 10) || 1,
-                    page_size: pageSize.value,
-                    orientation: orientation.value,
-                    print_side: printSide.value,
-                    color_mode: colorMode.value,
-                    layout_pages: lp,
-                    layout_type: __ezprintLayoutType(String(lp)),
-                    page_range: prVal || null,
-                    customer_name: null,
-                    customer_phone: null,
+                saveActiveDocumentSettings();
+                const docsToSubmit = printDocuments.length
+                    ? printDocuments
+                    : [createPrintDocument(currentFile, getCurrentPrintSettings())];
+                const invalidDoc = docsToSubmit.find(doc => {
+                    const range = (doc.settings && doc.settings.page_range || '').trim();
+                    return range && !isValidPageRange(range);
                 });
+                if (invalidDoc) {
+                    showPageRangeError('Invalid page range in ' + invalidDoc.file.name);
+                    return;
+                }
+                const res = docsToSubmit.length > 1
+                    ? await __ezprintSubmitDocuments(docsToSubmit, {
+                        customer_name: null,
+                        customer_phone: null,
+                    })
+                    : await __ezprintSubmitFile(currentFile, {
+                        copies: parseInt(copies.value, 10) || 1,
+                        page_size: pageSize.value,
+                        orientation: orientation.value,
+                        print_side: printSide.value,
+                        color_mode: colorMode.value,
+                        layout_pages: lp,
+                        layout_type: __ezprintLayoutType(String(lp)),
+                        page_range: prVal || null,
+                        customer_name: null,
+                        customer_phone: null,
+                    });
                 currentJobId = res.job_id;
                 showStatusSection();
                 initSingleJobPanel();
@@ -1994,6 +2122,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (previewSection) previewSection.style.display = 'none';
                 uploadForm.reset();
                 currentFile = null;
+                setPrintDocuments([]);
                 fileInfo.innerHTML = '';
                 previewBtn.disabled = true;
                 uploadBtn.disabled = true;

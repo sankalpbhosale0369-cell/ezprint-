@@ -320,6 +320,14 @@ class ApiClient:
             params={"expires_in": expires_in},
         )
 
+    def get_job_files(self, job_id: str, expires_in: int = 1800) -> ApiResult:
+        """Agent-only. Returns all document download URLs for a job."""
+        return self._request(
+            "GET", f"/api/v1/jobs/{job_id}/files",
+            use_agent=True,
+            params={"expires_in": expires_in},
+        )
+
     def download_job_file(
         self,
         job_id: str,
@@ -352,6 +360,36 @@ class ApiClient:
             return False, None, "Cannot reach object storage"
         except Exception as exc:
             logger.exception("download_job_file failed job=%s", job_id)
+            return False, None, str(exc)
+
+    def download_url_to_file(
+        self,
+        url: str,
+        output_path: str,
+        progress_callback=None,
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
+        """Stream a provided presigned URL to `output_path`."""
+        try:
+            with requests.get(url, stream=True, timeout=60) as r:
+                if r.status_code != 200:
+                    return False, None, f"HTTP {r.status_code} fetching presigned URL"
+                total = int(r.headers.get("Content-Length", 0))
+                downloaded = 0
+                with open(output_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if progress_callback and total:
+                            progress_callback(downloaded, total)
+            return True, output_path, None
+        except requests.exceptions.Timeout:
+            return False, None, "File download timeout"
+        except requests.exceptions.ConnectionError:
+            return False, None, "Cannot reach object storage"
+        except Exception as exc:
+            logger.exception("download_url_to_file failed")
             return False, None, str(exc)
 
     def update_job_status(

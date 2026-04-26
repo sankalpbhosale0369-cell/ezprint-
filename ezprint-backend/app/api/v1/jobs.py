@@ -12,6 +12,7 @@ Flow (see plan section 4):
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -22,9 +23,14 @@ from sqlalchemy.orm import Session
 from app.db import models
 from app.db.session import get_db
 from app.schemas.jobs import (
+    JobDocumentCreate,
+    JobDocumentFileUrl,
+    JobDocumentSummary,
+    JobDocumentUploadSlot,
     JobCreateRequest,
     JobCreateResponse,
     JobFileUrlResponse,
+    JobFilesUrlResponse,
     JobFinalizeResponse,
     JobListResponse,
     JobStatusUpdate,
@@ -61,6 +67,7 @@ def _get_job_for_tenant(db: Session, job_id: str, tenant_id: str) -> models.Prin
 
 
 def _job_to_summary(job: models.PrintJob) -> JobSummary:
+    files = [_job_file_to_summary(f) for f in sorted(job.files, key=lambda f: f.sort_order)]
     return JobSummary(
         job_id=job.job_id,
         filename=job.filename,
@@ -84,6 +91,83 @@ def _job_to_summary(job: models.PrintJob) -> JobSummary:
         started_at=job.started_at,
         completed_at=job.completed_at,
         error_message=job.error_message,
+        document_count=len(files) or 1,
+        files=files,
+    )
+
+
+def _job_file_to_summary(file: models.PrintJobFile) -> JobDocumentSummary:
+    return JobDocumentSummary(
+        file_id=file.file_id,
+        filename=file.filename,
+        file_type=file.file_type,
+        file_size=file.file_size,
+        sort_order=file.sort_order,
+        copies=file.copies,
+        page_size=file.page_size,
+        orientation=file.orientation,
+        print_side=file.print_side,
+        color_mode=file.color_mode,
+        layout_pages=file.layout_pages,
+        layout_type=file.layout_type,
+        page_range=file.page_range,
+        total_pages=file.total_pages,
+        color_pages=file.color_pages,
+        amount=file.amount,
+    )
+
+
+def _payload_documents(payload: JobCreateRequest) -> list[JobDocumentCreate]:
+    if payload.files:
+        return payload.files
+    return [
+        JobDocumentCreate(
+            filename=payload.filename or "document",
+            file_type=payload.file_type or "pdf",
+            file_size=payload.file_size or 0,
+            copies=payload.copies,
+            page_size=payload.page_size,
+            orientation=payload.orientation,
+            print_side=payload.print_side,
+            color_mode=payload.color_mode,
+            layout_pages=payload.layout_pages,
+            layout_type=payload.layout_type,
+            page_range=payload.page_range,
+        )
+    ]
+
+
+def _job_file_object_key(tenant_id: str, job_id: str, order: int, filename: str) -> str:
+    return storage.original_key(tenant_id, job_id, f"{order + 1:03d}_{filename}")
+
+
+def _document_url_response(
+    tenant_id: str,
+    job_id: str,
+    file: models.PrintJobFile,
+    expires_in: int,
+) -> JobDocumentFileUrl:
+    return JobDocumentFileUrl(
+        file_id=file.file_id,
+        filename=file.filename,
+        file_type=file.file_type,
+        file_size=file.file_size,
+        sort_order=file.sort_order,
+        url=storage.presign_get(
+            tenant_id,
+            file.object_key,
+            expires_in=expires_in,
+            download_filename=file.filename,
+        ),
+        expires_in=expires_in,
+        copies=file.copies,
+        page_size=file.page_size,
+        orientation=file.orientation,
+        print_side=file.print_side,
+        color_mode=file.color_mode,
+        layout_pages=file.layout_pages,
+        layout_type=file.layout_type,
+        page_range=file.page_range,
     )
 
 
@@ -94,19 +178,21 @@ def create_job(
     principal: Principal = Depends(require_customer_upload),
 ) -> JobCreateResponse:
     """Customer creates a job; we mint a tenant-scoped presigned PUT URL."""
+    documents = _payload_documents(payload)
+    first = documents[0]
     job = models.PrintJob(
         tenant_id=principal.tenant_id,
-        filename=payload.filename,
-        file_type=payload.file_type.lower().lstrip("."),
-        file_size=payload.file_size,
-        copies=payload.copies,
-        page_size=payload.page_size,
-        orientation=payload.orientation,
-        print_side=payload.print_side,
-        color_mode=payload.color_mode,
-        layout_pages=payload.layout_pages,
-        layout_type=payload.layout_type,
-        page_range=payload.page_range,
+        filename=first.filename,
+        file_type=first.file_type.lower().lstrip("."),
+        file_size=sum(doc.file_size for doc in documents),
+        copies=first.copies,
+        page_size=first.page_size,
+        orientation=first.orientation,
+        print_side=first.print_side,
+        color_mode=first.color_mode,
+        layout_pages=first.layout_pages,
+        layout_type=first.layout_type,
+        page_range=first.page_range,
         customer_name=payload.customer_name,
         customer_phone=payload.customer_phone,
         status="AwaitingUpload",
@@ -115,20 +201,54 @@ def create_job(
     db.add(job)
     db.flush()  # get auto-generated job_id
 
-    object_key = storage.original_key(principal.tenant_id, job.job_id, payload.filename)
-    job.object_key = object_key
+    upload_slots: list[JobDocumentUploadSlot] = []
+    for idx, doc in enumerate(documents):
+        object_key = _job_file_object_key(principal.tenant_id, job.job_id, idx, doc.filename)
+        job_file = models.PrintJobFile(
+            tenant_id=principal.tenant_id,
+            sort_order=idx,
+            filename=doc.filename,
+            object_key=object_key,
+            file_size=doc.file_size,
+            file_type=doc.file_type.lower().lstrip("."),
+            copies=doc.copies,
+            page_size=doc.page_size,
+            orientation=doc.orientation,
+            print_side=doc.print_side,
+            color_mode=doc.color_mode,
+            layout_pages=doc.layout_pages,
+            layout_type=doc.layout_type,
+            page_range=doc.page_range,
+        )
+        job.files.append(job_file)
+        if idx == 0:
+            job.object_key = object_key
     db.commit()
     db.refresh(job)
 
-    presigned = storage.presign_put(
-        principal.tenant_id, object_key, expires_in=900
-    )
+    for job_file in sorted(job.files, key=lambda f: f.sort_order):
+        presigned = storage.presign_put(
+            principal.tenant_id, job_file.object_key, expires_in=900
+        )
+        upload_slots.append(
+            JobDocumentUploadSlot(
+                file_id=job_file.file_id,
+                filename=job_file.filename,
+                file_type=job_file.file_type,
+                file_size=job_file.file_size,
+                object_key=job_file.object_key,
+                upload_url=presigned.url,
+                upload_url_expires_in=presigned.expires_in,
+            )
+        )
+    first_slot = upload_slots[0]
     return JobCreateResponse(
         job_id=job.job_id,
         tenant_id=principal.tenant_id,
-        object_key=object_key,
-        upload_url=presigned.url,
-        upload_url_expires_in=presigned.expires_in,
+        object_key=first_slot.object_key,
+        upload_url=first_slot.upload_url,
+        upload_url_expires_in=first_slot.upload_url_expires_in,
+        files=upload_slots,
     )
 
 
@@ -152,7 +272,42 @@ async def upload_job_file_proxy(
         )
     data = await file.read()
     content_type = file.content_type or "application/octet-stream"
-    storage.put_bytes(principal.tenant_id, job.object_key, data, content_type)
+    job_file = sorted(job.files, key=lambda f: f.sort_order)[0] if job.files else None
+    object_key = job_file.object_key if job_file else job.object_key
+    storage.put_bytes(principal.tenant_id, object_key, data, content_type)
+    if job_file:
+        job_file.file_size = len(data)
+        job_file.uploaded_at = datetime.utcnow()
+        job.file_size = sum(f.file_size for f in job.files)
+        db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/{job_id}/files/{file_id}/upload", status_code=204)
+async def upload_job_document_proxy(
+    job_id: str,
+    file_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_customer_upload),
+) -> Response:
+    """Customer uploads one document within a multi-document print job."""
+    job = _get_job_for_tenant(db, job_id, principal.tenant_id)
+    if job.status != "AwaitingUpload":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Job is in status {job.status}, cannot upload",
+        )
+    job_file = next((f for f in job.files if f.file_id == file_id), None)
+    if not job_file:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job document not found")
+    data = await file.read()
+    content_type = file.content_type or "application/octet-stream"
+    storage.put_bytes(principal.tenant_id, job_file.object_key, data, content_type)
+    job_file.file_size = len(data)
+    job_file.uploaded_at = datetime.utcnow()
+    job.file_size = sum(f.file_size for f in job.files)
+    db.commit()
     return Response(status_code=204)
 
 
@@ -170,21 +325,6 @@ async def finalize_job(
             detail=f"Job is in status {job.status}, cannot finalize",
         )
 
-    # Pull the file back from MinIO just far enough to classify it.
-    try:
-        head = storage.head(principal.tenant_id, job.object_key)
-        actual_size = int(head.get("ContentLength", 0))
-        obj = storage.internal_client.get_object(Bucket=storage.bucket, Key=job.object_key)
-        data: bytes = obj["Body"].read()
-    except Exception as exc:
-        logger.exception("finalize_job failed reading object")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Upload not found in storage: {exc}",
-        )
-
-    stats = classify_bytes_for_job(job.file_type, data, job.page_range)
-
     pricing = db.scalars(
         select(models.ShopPricing).where(models.ShopPricing.tenant_id == principal.tenant_id)
     ).first()
@@ -198,21 +338,82 @@ async def finalize_job(
         if pricing
         else PricingRates()
     )
-    amount = calculate_amount(
-        rates,
-        JobBillingInputs(
-            total_pages=stats.total_pages,
-            color_pages=stats.color_pages,
-            copies=job.copies,
-            color_mode=job.color_mode,
-            print_side=job.print_side,
-        ),
-    )
 
-    job.file_size = actual_size or job.file_size
-    job.total_pages = stats.total_pages
-    job.color_pages = stats.color_pages
-    job.amount = amount
+    job_files = sorted(job.files, key=lambda f: f.sort_order)
+    if not job_files:
+        job_files = [
+            models.PrintJobFile(
+                tenant_id=principal.tenant_id,
+                sort_order=0,
+                filename=job.filename,
+                object_key=job.object_key,
+                file_size=job.file_size,
+                file_type=job.file_type,
+                copies=job.copies,
+                page_size=job.page_size,
+                orientation=job.orientation,
+                print_side=job.print_side,
+                color_mode=job.color_mode,
+                layout_pages=job.layout_pages,
+                layout_type=job.layout_type,
+                page_range=job.page_range,
+            )
+        ]
+        job.files.extend(job_files)
+
+    total_size = 0
+    total_pages = 0
+    color_pages = 0
+    amount = 0.0
+    for job_file in job_files:
+        try:
+            head = storage.head(principal.tenant_id, job_file.object_key)
+            actual_size = int(head.get("ContentLength", 0))
+            obj = storage.internal_client.get_object(Bucket=storage.bucket, Key=job_file.object_key)
+            data: bytes = obj["Body"].read()
+        except Exception as exc:
+            logger.exception("finalize_job failed reading object file_id=%s", job_file.file_id)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Upload not found in storage for {job_file.filename}: {exc}",
+            )
+
+        stats = classify_bytes_for_job(job_file.file_type, data, job_file.page_range)
+        doc_amount = calculate_amount(
+            rates,
+            JobBillingInputs(
+                total_pages=stats.total_pages,
+                color_pages=stats.color_pages,
+                copies=job_file.copies,
+                color_mode=job_file.color_mode,
+                print_side=job_file.print_side,
+            ),
+        )
+        job_file.file_size = actual_size or job_file.file_size
+        job_file.total_pages = stats.total_pages
+        job_file.color_pages = stats.color_pages
+        job_file.amount = doc_amount
+        total_size += job_file.file_size
+        total_pages += stats.total_pages
+        color_pages += stats.color_pages
+        amount += doc_amount
+
+    first_file = job_files[0]
+    job.filename = first_file.filename if len(job_files) == 1 else f"{len(job_files)} documents"
+    job.object_key = first_file.object_key
+    job.file_type = first_file.file_type if len(job_files) == 1 else "multi"
+    job.file_size = total_size
+    job.copies = first_file.copies
+    job.page_size = first_file.page_size
+    job.orientation = first_file.orientation
+    job.print_side = first_file.print_side
+    job.color_mode = first_file.color_mode
+    job.layout_pages = first_file.layout_pages
+    job.layout_type = first_file.layout_type
+    job.page_range = first_file.page_range
+    job.total_pages = total_pages
+    job.color_pages = color_pages
+    job.amount = round(amount, 2)
     db.commit()
 
     # Advance state machine: AwaitingUpload -> Queued. This also broadcasts
@@ -220,7 +421,11 @@ async def finalize_job(
     job = transition(db, job, "Queued")
 
     # Push the agent-facing new_job payload (includes a short-lived presigned GET).
-    download_url = storage.presign_get(
+    document_urls = [
+        _document_url_response(principal.tenant_id, job.job_id, file, 1800).model_dump()
+        for file in sorted(job.files, key=lambda f: f.sort_order)
+    ]
+    download_url = document_urls[0]["url"] if document_urls else storage.presign_get(
         principal.tenant_id, job.object_key, expires_in=1800, download_filename=job.filename
     )
     event = {
@@ -244,6 +449,8 @@ async def finalize_job(
             "customer_name": job.customer_name,
             "customer_phone": job.customer_phone,
             "download_url": download_url,
+            "document_count": len(document_urls) or 1,
+            "documents": document_urls,
             "created_at": job.created_at.isoformat(),
         },
     }
@@ -307,19 +514,74 @@ def get_job_file_url(
     expires_in: int = Query(default=1800, ge=60, le=3600),
 ) -> JobFileUrlResponse:
     job = _get_job_for_tenant(db, job_id, principal.tenant_id)
-    if job.assets_deleted or not job.object_key:
+    first_file = sorted(job.files, key=lambda f: f.sort_order)[0] if job.files else None
+    object_key = first_file.object_key if first_file else job.object_key
+    filename = first_file.filename if first_file else job.filename
+    if job.assets_deleted or not object_key:
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Job assets have been cleaned up",
         )
     url = storage.presign_get(
         principal.tenant_id,
-        job.object_key,
+        object_key,
         expires_in=expires_in,
-        download_filename=job.filename,
+        download_filename=filename,
     )
     return JobFileUrlResponse(
-        job_id=job.job_id, url=url, expires_in=expires_in, filename=job.filename
+        job_id=job.job_id, url=url, expires_in=expires_in, filename=filename
+    )
+
+
+@router.get("/{job_id}/files", response_model=JobFilesUrlResponse)
+def get_job_files(
+    job_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_agent),
+    expires_in: int = Query(default=1800, ge=60, le=3600),
+) -> JobFilesUrlResponse:
+    job = _get_job_for_tenant(db, job_id, principal.tenant_id)
+    if job.assets_deleted:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Job assets have been cleaned up",
+        )
+    files = sorted(job.files, key=lambda f: f.sort_order)
+    if not files and job.object_key:
+        url = storage.presign_get(
+            principal.tenant_id,
+            job.object_key,
+            expires_in=expires_in,
+            download_filename=job.filename,
+        )
+        return JobFilesUrlResponse(
+            job_id=job.job_id,
+            files=[
+                JobDocumentFileUrl(
+                    file_id=job.job_id,
+                    filename=job.filename,
+                    file_type=job.file_type,
+                    file_size=job.file_size,
+                    sort_order=0,
+                    url=url,
+                    expires_in=expires_in,
+                    copies=job.copies,
+                    page_size=job.page_size,
+                    orientation=job.orientation,
+                    print_side=job.print_side,
+                    color_mode=job.color_mode,
+                    layout_pages=job.layout_pages,
+                    layout_type=job.layout_type,
+                    page_range=job.page_range,
+                )
+            ],
+        )
+    return JobFilesUrlResponse(
+        job_id=job.job_id,
+        files=[
+            _document_url_response(principal.tenant_id, job.job_id, file, expires_in)
+            for file in files
+        ],
     )
 
 

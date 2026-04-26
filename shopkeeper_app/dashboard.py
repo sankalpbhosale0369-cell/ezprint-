@@ -32,6 +32,7 @@ from urllib.parse import unquote
 import re
 from datetime import datetime, timedelta, timezone
 import json
+import tempfile
 
 # Add parent directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -9595,6 +9596,12 @@ class DashboardWindow(QMainWindow):
         # Update job status via authoritative reporter
         self.report_job_status(job.job_id, 'In Queue', 0, "Initializing...")
         
+        documents = self._get_print_job_documents(job)
+        if documents:
+            self._print_multi_document_job(job, documents)
+            self.load_print_jobs()
+            return
+
         # Build settings dict to apply on printer
         settings = {
             'copies': job.copies or 1,
@@ -9657,6 +9664,89 @@ class DashboardWindow(QMainWindow):
         
         # Refresh jobs list
         self.load_print_jobs()
+
+    def _get_print_job_documents(self, job):
+        """Fetch the backend document manifest for true multi-document jobs."""
+        if not getattr(self, "api_client", None):
+            return []
+        try:
+            ok, data, err = self.api_client.get_job_files(job.job_id)
+            if not ok or not data:
+                logger.warning("Could not fetch document manifest for job=%s err=%s", job.job_id, err)
+                return []
+            documents = data.get("files") or []
+            if len(documents) <= 1:
+                return []
+            return sorted(documents, key=lambda d: d.get("sort_order", 0))
+        except Exception as exc:
+            logger.exception("Failed fetching document manifest for job=%s", job.job_id)
+            return []
+
+    def _print_multi_document_job(self, job, documents):
+        """Print each document in a job sequentially with its own settings."""
+        class _MultiDocumentPrintWorker(PrintJobWorker):
+            def __init__(self, dashboard, job, documents, printer_manager, websocket_client):
+                super().__init__(job.job_id, job.file_path, printer_manager)
+                self.dashboard = dashboard
+                self.job = job
+                self.documents = documents
+                self.websocket_client = websocket_client
+
+            def run(self):
+                try:
+                    self.dashboard.report_job_status(self.job_id, 'Printing Started')
+
+                    temp_dir = os.path.join(tempfile.gettempdir(), 'ezprint_downloads')
+                    os.makedirs(temp_dir, exist_ok=True)
+
+                    for index, doc in enumerate(self.documents):
+                        filename = doc.get('filename') or f"document_{index + 1}.pdf"
+                        safe_name = ''.join(c if c.isalnum() or c in ('.', '_', '-') else '_' for c in filename)
+                        local_path = os.path.join(temp_dir, f"{self.job_id}_{index + 1:03d}_{safe_name}")
+                        url = doc.get('url')
+                        if not url:
+                            self.job_failed.emit(self.job_id, f"Missing download URL for {filename}")
+                            return
+
+                        ok, downloaded_path, err = self.dashboard.api_client.download_url_to_file(url, local_path)
+                        if not ok:
+                            self.job_failed.emit(self.job_id, f"Failed to download {filename}: {err}")
+                            return
+
+                        settings = {
+                            'copies': doc.get('copies') or 1,
+                            'page_range': doc.get('page_range') or '',
+                            'page_size': doc.get('page_size') or 'A4',
+                            'orientation': doc.get('orientation') or 'Portrait',
+                            'print_side': doc.get('print_side') or 'Single',
+                            'color_mode': doc.get('color_mode') or 'Color',
+                            'layout_pages': doc.get('layout_pages') or 1,
+                        }
+                        result = self.printer_manager.print_document_with_settings(
+                            downloaded_path,
+                            doc.get('file_type') or 'pdf',
+                            settings,
+                            job_id=self.job_id,
+                        )
+                        if result is None or not isinstance(result, (tuple, list)):
+                            self.job_failed.emit(self.job_id, "Print pipeline returned no result")
+                            return
+                        if not result[0]:
+                            self.job_failed.emit(self.job_id, result[1] if len(result) > 1 else "Print failed")
+                            return
+
+                    self.job_completed.emit(self.job_id, 'Completed')
+                except Exception as exc:
+                    logger.exception("Multi-document print worker failed job=%s", self.job_id)
+                    self.job_failed.emit(self.job_id, f"Print worker error: {exc}")
+
+        worker = _MultiDocumentPrintWorker(self, job, documents, self.printer_manager, self.websocket_client)
+        worker.job_completed.connect(self.on_job_completed)
+        worker.job_failed.connect(self.on_job_failed)
+        worker.start()
+        self.print_workers[job.job_id] = worker
+        if not self.auto_mode:
+            logger.info("Started multi-document print job: %s (%s documents)", job.job_id, len(documents))
     
     def on_job_completed(self, job_id, status):
         """Handle job completion"""
