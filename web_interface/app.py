@@ -1,5 +1,3 @@
-import eventlet
-eventlet.monkey_patch()
 
 """
 Flask web application for customer interface
@@ -8,6 +6,8 @@ Flask web application for customer interface
 import os
 import json
 import uuid
+import io  
+from PIL import Image
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_from_directory, url_for
@@ -52,7 +52,7 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 
 # Initialize SocketIO with Redis message queue for horizontal scaling
 # Decide async mode dynamically
-async_mode = "eventlet" if cfg.ENV == "prod" else "threading"
+async_mode = "threading"
 
 socketio = SocketIO(
     app,
@@ -297,8 +297,6 @@ def upload_file():
         
         # Get color page dict if color mode is Color
         color_page_dict = None
-        if color_mode.lower() != 'black & white':
-            color_page_dict = classify_color_pages(file_path, file_type)
         
         pricing_dict = {
             'bw_single': bw_single, 'bw_double': bw_double,
@@ -523,16 +521,24 @@ def create_preview():
         preview_dir.mkdir(exist_ok=True)
 
         doc = _fitz.open(final_pdf)
-        total_preview_pages = len(doc)
+        MAX_PREVIEW_PAGES = 50  # Safety ceiling for very large documents
+        total_preview_pages = min(len(doc), MAX_PREVIEW_PAGES)
 
         for page_num in range(total_preview_pages):
             page = doc[page_num]
-            scale = 2.0 if layout_pages > 1 else 1.5
+            scale = 1.2
             mat = _fitz.Matrix(scale, scale)
             pix = page.get_pixmap(matrix=mat, alpha=False)
-            preview_filename = f"preview_{uuid.uuid4().hex[:8]}_sheet_{page_num+1}.png"
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+
+            if img.width > 800:
+                ratio = 800 / img.width
+                img = img.resize((800, int(img.height * ratio)), Image.Resampling.LANCZOS)
+
+            preview_filename = f"preview_{uuid.uuid4().hex[:8]}_sheet_{page_num+1}.jpg"
             preview_path = preview_dir / preview_filename
-            pix.save(str(preview_path))
+
+            img.save(str(preview_path), "JPEG", quality=60, optimize=True)
             preview_urls.append(f'/api/preview/{preview_filename}')
 
         doc.close()
@@ -571,7 +577,7 @@ def create_preview():
 
         response_data = {
             'success': True,
-            'total_pages': total_preview_pages,
+            'total_pages': len(preview_urls),
             'total_document_pages': total_document_pages,
             'selected_document_pages': len(selected_pages),
             'layout_pages': layout_pages,
@@ -638,6 +644,187 @@ def serve_preview(filename):
     except Exception as e:
         logger.error(f"Error serving preview: {e}")
         return jsonify({'error': 'Failed to serve preview'}), 500
+
+@app.route('/api/convert-docx', methods=['POST'])
+def convert_docx_to_pdf():
+    """
+    Convert multiple DOCX files into a single merged PDF.
+    Used by the frontend multi-DOCX upload flow.
+    Reuses existing convert_to_pdf() from file_processor.
+    """
+    try:
+        if 'file[]' not in request.files:
+            return jsonify({'error': 'No files uploaded'}), 400
+
+        files = request.files.getlist('file[]')
+        if not files or len(files) < 2:
+            return jsonify({'error': 'At least 2 DOCX files required'}), 400
+
+        # Validate all files are DOCX
+        for idx, file in enumerate(files):
+            if not file.filename.lower().endswith('.docx'):
+                return jsonify({'error': f'File {idx + 1} is not a DOCX file'}), 400
+
+        import tempfile
+        import shutil
+        import fitz  # PyMuPDF (already a project dependency)
+        from shared.file_processor import convert_to_pdf
+
+        temp_dir = tempfile.mkdtemp()
+        converted_pdfs = []
+
+        try:
+            # Step 1: Save each DOCX and convert to PDF (preserving selection order)
+            for idx, file in enumerate(files):
+                safe_name = secure_filename(file.filename) or f"doc_{idx}.docx"
+                docx_path = os.path.join(temp_dir, f"{idx}_{safe_name}")
+                file.save(docx_path)
+
+                pdf_path = convert_to_pdf(docx_path, 'docx')
+                if pdf_path == docx_path:
+                    # Conversion failed - convert_to_pdf returns original path on failure
+                    return jsonify({'error': f'Failed to convert "{file.filename}" to PDF. Ensure LibreOffice or MS Word is available.'}), 500
+
+                converted_pdfs.append(pdf_path)
+                logger.info(f"DOCX convert: [{idx + 1}/{len(files)}] {file.filename} -> PDF OK")
+
+            # Step 2: Merge all converted PDFs in order
+            merged_doc = fitz.open()
+            for pdf_path in converted_pdfs:
+                src_doc = fitz.open(pdf_path)
+                merged_doc.insert_pdf(src_doc)
+                src_doc.close()
+
+            # Step 3: Save merged PDF and return as binary
+            merged_path = os.path.join(temp_dir, "merged_docx_result.pdf")
+            merged_doc.save(merged_path)
+            merged_doc.close()
+
+            logger.info(f"DOCX merge complete: {len(files)} files -> {os.path.getsize(merged_path)} bytes")
+
+            with open(merged_path, 'rb') as f:
+                pdf_bytes = f.read()
+
+            from flask import Response
+            return Response(
+                pdf_bytes,
+                mimetype='application/pdf',
+                headers={'Content-Disposition': 'attachment; filename=merged_docx.pdf'}
+            )
+
+        finally:
+            # Cleanup all temp files
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            # Also cleanup any converted PDFs outside temp_dir (defensive)
+            for pdf_path in converted_pdfs:
+                if os.path.exists(pdf_path) and not pdf_path.startswith(temp_dir):
+                    try:
+                        os.remove(pdf_path)
+                    except Exception:
+                        pass
+
+    except Exception as e:
+        logger.error(f"DOCX conversion error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Conversion failed: {str(e)}'}), 500
+
+@app.route('/api/convert-mixed', methods=['POST'])
+def convert_mixed_to_pdf():
+    """
+    Convert a mix of image, PDF, and DOCX files into a single merged PDF.
+    Used by the frontend mixed-file upload flow.
+    Preserves user selection order.
+    Reuses existing convert_to_pdf(), combine_images_to_pdf() utilities.
+    """
+    try:
+        if 'file[]' not in request.files:
+            return jsonify({'error': 'No files uploaded'}), 400
+
+        files = request.files.getlist('file[]')
+        if not files or len(files) < 2:
+            return jsonify({'error': 'At least 2 files required for mixed upload'}), 400
+
+        import tempfile
+        import shutil
+        import fitz  # PyMuPDF (already a project dependency)
+        from shared.file_processor import convert_to_pdf
+
+        temp_dir = tempfile.mkdtemp()
+        normalized_pdfs = []  # List of PDF paths in selection order
+
+        try:
+            for idx, file in enumerate(files):
+                filename = file.filename or f'file_{idx}'
+                ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+                safe_name = secure_filename(filename) or f"file_{idx}.bin"
+                saved_path = os.path.join(temp_dir, f"{idx}_{safe_name}")
+                file.save(saved_path)
+
+                # Classify and normalize each file to PDF
+                if ext in ('png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'webp'):
+                    # Image -> single-page PDF using existing combine_images_to_pdf
+                    img_pdf_path = os.path.join(temp_dir, f"{idx}_img.pdf")
+                    combine_images_to_pdf([saved_path], img_pdf_path)
+                    normalized_pdfs.append(img_pdf_path)
+                    logger.info(f"Mixed convert: [{idx + 1}/{len(files)}] {filename} (image) -> PDF OK")
+
+                elif ext == 'pdf':
+                    # PDF -> use directly
+                    normalized_pdfs.append(saved_path)
+                    logger.info(f"Mixed convert: [{idx + 1}/{len(files)}] {filename} (PDF) -> direct")
+
+                elif ext in ('docx', 'doc'):
+                    # DOCX -> convert to PDF using existing convert_to_pdf
+                    pdf_path = convert_to_pdf(saved_path, ext)
+                    if pdf_path == saved_path:
+                        # Conversion failed - convert_to_pdf returns original path on failure
+                        return jsonify({'error': f'Failed to convert "{filename}" to PDF. Ensure LibreOffice or MS Word is available.'}), 500
+                    normalized_pdfs.append(pdf_path)
+                    logger.info(f"Mixed convert: [{idx + 1}/{len(files)}] {filename} (DOCX) -> PDF OK")
+
+                else:
+                    return jsonify({'error': f'Unsupported file type: "{filename}"'}), 400
+
+            # Merge all normalized PDFs in selection order
+            merged_doc = fitz.open()
+            for pdf_path in normalized_pdfs:
+                src_doc = fitz.open(pdf_path)
+                merged_doc.insert_pdf(src_doc)
+                src_doc.close()
+
+            merged_path = os.path.join(temp_dir, "merged_mixed_result.pdf")
+            merged_doc.save(merged_path)
+            merged_doc.close()
+
+            logger.info(f"Mixed merge complete: {len(files)} files -> {os.path.getsize(merged_path)} bytes")
+
+            with open(merged_path, 'rb') as f:
+                pdf_bytes = f.read()
+
+            from flask import Response
+            return Response(
+                pdf_bytes,
+                mimetype='application/pdf',
+                headers={'Content-Disposition': 'attachment; filename=merged_mixed.pdf'}
+            )
+
+        finally:
+            # Cleanup all temp files
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            # Also cleanup any converted PDFs outside temp_dir (defensive)
+            for pdf_path in normalized_pdfs:
+                if os.path.exists(pdf_path) and not pdf_path.startswith(temp_dir):
+                    try:
+                        os.remove(pdf_path)
+                    except Exception:
+                        pass
+
+    except Exception as e:
+        logger.error(f"Mixed conversion error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Conversion failed: {str(e)}'}), 500
 
 @app.route('/api/job/<job_id>/status')
 def get_job_status(job_id):

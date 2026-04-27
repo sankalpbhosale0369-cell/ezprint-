@@ -2166,41 +2166,43 @@ class PrinterManager:
                 raise PrinterError(f"All network printing methods failed: {str(e2)}")
     
     def _print_to_network_printer_gdi_fallback(self, file_path, file_type, settings, job_id=None, printer_name=None):
-        """Fallback GDI printing method for network printers"""
+        """Fallback GDI printing method for network printers.
+        
+        HOTFIX 2026-04-27: The caller (print_document_with_settings) already
+        generates the fully composed layout PDF via generate_final_print_pdf().
+        This fallback must NOT re-compose — it should use file_path directly
+        (which is already the composed PDF with layout + page_range baked in).
+        """
         # Use provided printer_name or fallback to self.current_printer
         target_printer = printer_name or self.current_printer
         try:
-            # Prepare file according to layout (N-up) and color
-            layout_pages = int(settings.get('layout_pages') or 1)
+            # Read settings for Sumatra/GDI configuration (copies, orientation, etc.)
             color_mode = settings.get('color_mode') or 'Color'
             page_size = settings.get('page_size') or 'A4'
             orientation = settings.get('orientation') or 'Portrait'
-            page_range = (settings.get('page_range') or '').strip()
             copies = int(settings.get('copies') or 1)
             print_side = settings.get('print_side') or 'Single'
 
-            try:
-                # CRITICAL FIX: Use generate_final_print_pdf() for preview-print matching
-                nup_path = generate_final_print_pdf(
-                    file_path, 
-                    file_type, 
-                    page_size=page_size, 
-                    orientation=orientation, 
-                    layout_pages=layout_pages, 
-                    color_mode=color_mode,
-                    page_range=page_range
-                )
-            except Exception as e:
-                error_msg = f"Failed to generate final print PDF: {str(e)}"
-                logger.error(error_msg)
-                raise PrinterError(error_msg)
+            # HOTFIX: Use the incoming file_path directly — it is already the
+            # composed layout PDF from the caller. Do NOT call
+            # generate_final_print_pdf() again, as that would double-process
+            # the layout (e.g. 2-up of an already 2-up PDF).
+            nup_path = file_path
+
+            # HOTFIX: The composed PDF already has layout + page_range applied.
+            # Passing the original page_range again would re-slice the already-
+            # filtered PDF, causing wrong pages or empty output.
+            effective_page_range = None
+
+            # Treat the composed file as PDF for downstream printing
+            effective_file_type = 'pdf' if nup_path.lower().endswith('.pdf') else file_type
 
             # Try SumatraPDF for PDFs first (works with network printers)
             if nup_path.lower().endswith('.pdf'):
                 sumatra = self._find_sumatra_pdf()
                 if sumatra and os.path.exists(sumatra):
                     try:
-                        ok, msg = self._print_with_sumatra(sumatra, nup_path, copies, page_range, orientation, print_side, color_mode, printer_name=target_printer)
+                        ok, msg = self._print_with_sumatra(sumatra, nup_path, copies, effective_page_range, orientation, print_side, color_mode, printer_name=target_printer)
                         if ok:
                             return True, msg
                     except Exception as e:
@@ -2208,7 +2210,7 @@ class PrinterManager:
 
             # Fallback: Use GDI printing (works with all Windows printers)
             try:
-                ok, msg = self._print_via_gdi_images(nup_path, file_type, copies, page_range, page_size, orientation, color_mode, print_side=print_side, job_id=job_id, printer_name=target_printer)
+                ok, msg = self._print_via_gdi_images(nup_path, effective_file_type, copies, effective_page_range, page_size, orientation, color_mode, print_side=print_side, job_id=job_id, printer_name=target_printer)
                 return ok, msg
             except Exception as e:
                 error_msg = f"Network printer GDI printing failed: {str(e)}"

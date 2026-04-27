@@ -252,6 +252,18 @@ document.addEventListener('DOMContentLoaded', function () {
             /\.(png|jpe?g|gif|bmp|tiff)$/i.test(f.name)
         );
 
+        // Check if all files are PDFs (for multi-PDF merge)
+        const pdfFiles = files.filter(f =>
+            f.type === 'application/pdf' ||
+            /\.pdf$/i.test(f.name)
+        );
+
+        // Check if all files are DOCX (for multi-DOCX convert+merge)
+        const docxFiles = files.filter(f =>
+            f.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+            /\.docx$/i.test(f.name)
+        );
+
         // If multiple images, combine into PDF
         if (imageFiles.length > 1) {
             console.log(`Combining ${imageFiles.length} images into PDF...`);
@@ -289,6 +301,127 @@ document.addEventListener('DOMContentLoaded', function () {
             } catch (error) {
                 console.error('PDF combination failed:', error);
                 alert('Failed to combine images. Please try again.');
+                return;
+            }
+
+        } else if (pdfFiles.length > 1 && pdfFiles.length === files.length) {
+            // Multiple PDFs selected - merge into one combined PDF
+            console.log(`Merging ${pdfFiles.length} PDFs into one...`);
+
+            // Show loading
+            if (fileInfo) {
+                fileInfo.innerHTML = `<div class="loading">Merging ${pdfFiles.length} PDFs...</div>`;
+            }
+
+            try {
+                const mergedPdfBlob = await mergePDFsForPrint(pdfFiles);
+                const mergedPdfFile = new File([mergedPdfBlob], `merged_${Date.now()}.pdf`, { type: 'application/pdf' });
+
+                currentFile = mergedPdfFile;
+
+                // Update UI
+                if (fileInfo) {
+                    fileInfo.innerHTML = `
+                        <div class="file-selected">
+                            <i class="fas fa-file-pdf"></i>
+                            <span>${pdfFiles.length} PDFs merged into one</span>
+                            <span class="file-size">${(mergedPdfFile.size / (1024 * 1024)).toFixed(2)} MB</span>
+                        </div>
+                    `;
+                }
+
+                // Enable buttons
+                previewBtn.disabled = false;
+                uploadBtn.disabled = false;
+
+                // Auto-preview
+                setTimeout(() => generatePreview(true), 500);
+
+            } catch (error) {
+                console.error('PDF merge failed:', error);
+                alert('Failed to merge PDFs. Please try again.');
+                return;
+            }
+
+        } else if (docxFiles.length > 1 && docxFiles.length === files.length) {
+            // Multiple DOCX files selected - convert each to PDF on server, then merge
+            console.log(`Converting and merging ${docxFiles.length} DOCX files into PDF...`);
+
+            // Show loading
+            if (fileInfo) {
+                fileInfo.innerHTML = `<div class="loading">Converting ${docxFiles.length} DOCX files to PDF...</div>`;
+            }
+
+            try {
+                const mergedPdfBlob = await convertAndMergeDocxFiles(docxFiles);
+                const mergedPdfFile = new File([mergedPdfBlob], `merged_docx_${Date.now()}.pdf`, { type: 'application/pdf' });
+
+                currentFile = mergedPdfFile;
+
+                // Update UI (same pattern as multi-PDF)
+                if (fileInfo) {
+                    fileInfo.innerHTML = `
+                        <div class="file-selected">
+                            <i class="fas fa-file-pdf"></i>
+                            <span>${docxFiles.length} DOCX files converted & merged</span>
+                            <span class="file-size">${(mergedPdfFile.size / (1024 * 1024)).toFixed(2)} MB</span>
+                        </div>
+                    `;
+                }
+
+                // Enable buttons
+                previewBtn.disabled = false;
+                uploadBtn.disabled = false;
+
+                // Auto-preview
+                setTimeout(() => generatePreview(true), 500);
+
+            } catch (error) {
+                console.error('DOCX conversion/merge failed:', error);
+                alert('Failed to convert DOCX files. Please try again.');
+                return;
+            }
+
+        } else if (files.length > 1 &&
+                   imageFiles.length !== files.length &&
+                   pdfFiles.length !== files.length &&
+                   docxFiles.length !== files.length) {
+            // ── MIXED FILES: IMG + PDF + DOCX in any combination ──
+            // This branch ONLY fires when we have 2+ files that are NOT all one type.
+            console.log(`Processing ${files.length} mixed files (${imageFiles.length} images, ${pdfFiles.length} PDFs, ${docxFiles.length} DOCX)...`);
+
+            // Show loading
+            if (fileInfo) {
+                fileInfo.innerHTML = `<div class="loading">Processing ${files.length} mixed files...</div>`;
+            }
+
+            try {
+                const mergedPdfBlob = await convertMixedFiles(files);
+                const mergedPdfFile = new File([mergedPdfBlob], `mixed_${Date.now()}.pdf`, { type: 'application/pdf' });
+
+                currentFile = mergedPdfFile;
+
+                // Update UI (same pattern as multi-PDF)
+                if (fileInfo) {
+                    fileInfo.innerHTML = `
+                        <div class="file-selected">
+                            <i class="fas fa-file-pdf"></i>
+                            <span>${files.length} files combined into PDF</span>
+                            <span class="file-size">${(mergedPdfFile.size / (1024 * 1024)).toFixed(2)} MB</span>
+                        </div>
+                    `;
+                }
+
+                // Enable buttons
+                previewBtn.disabled = false;
+                uploadBtn.disabled = false;
+
+                // Auto-preview
+                setTimeout(() => generatePreview(true), 500);
+
+            } catch (error) {
+                console.error('Mixed file conversion failed:', error);
+                alert('Failed to process mixed files. Please try again.');
                 return;
             }
 
@@ -382,6 +515,80 @@ document.addEventListener('DOMContentLoaded', function () {
 
         const pdfBytes = await pdfDoc.save();
         return new Blob([pdfBytes], { type: 'application/pdf' });
+    }
+
+    /**
+     * Merge multiple PDF files into a single PDF (for PRINT multi-PDF upload)
+     * Uses pdf-lib to concatenate PDFs while preserving page order
+     */
+    async function mergePDFsForPrint(pdfFiles) {
+        const { PDFDocument } = PDFLib;
+
+        const mergedPdf = await PDFDocument.create();
+
+        for (let i = 0; i < pdfFiles.length; i++) {
+            const fileBytes = await pdfFiles[i].arrayBuffer();
+            try {
+                const sourcePdf = await PDFDocument.load(fileBytes, { ignoreEncryption: true });
+                const pageIndices = sourcePdf.getPageIndices();
+                const copiedPages = await mergedPdf.copyPages(sourcePdf, pageIndices);
+                copiedPages.forEach(page => mergedPdf.addPage(page));
+            } catch (e) {
+                console.error(`Failed to merge PDF ${i + 1} (${pdfFiles[i].name}):`, e);
+                throw new Error(`Could not read PDF file "${pdfFiles[i].name}". It may be corrupted or password-protected.`);
+            }
+        }
+
+        const mergedBytes = await mergedPdf.save();
+        return new Blob([mergedBytes], { type: 'application/pdf' });
+    }
+
+    /**
+     * Convert multiple DOCX files to PDF and merge them (server-side conversion)
+     * Sends all DOCX files to backend /api/convert-docx, receives single merged PDF
+     * Order of files in the array is preserved in the final PDF
+     */
+    async function convertAndMergeDocxFiles(docxFiles) {
+        const formData = new FormData();
+        for (let i = 0; i < docxFiles.length; i++) {
+            formData.append('file[]', docxFiles[i]);
+        }
+
+        const response = await fetch('/api/convert-docx', {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+            throw new Error(errorData.error || 'DOCX conversion failed');
+        }
+
+        return await response.blob();
+    }
+
+    /**
+     * Convert mixed file types (IMG + PDF + DOCX) into a single merged PDF (server-side)
+     * Sends all files to backend /api/convert-mixed, receives single merged PDF
+     * Order of files in the array is preserved in the final PDF
+     */
+    async function convertMixedFiles(mixedFiles) {
+        const formData = new FormData();
+        for (let i = 0; i < mixedFiles.length; i++) {
+            formData.append('file[]', mixedFiles[i]);
+        }
+
+        const response = await fetch('/api/convert-mixed', {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+            throw new Error(errorData.error || 'Mixed file conversion failed');
+        }
+
+        return await response.blob();
     }
 
 
@@ -610,7 +817,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (backendTotalAmount !== null && backendTotalAmount !== undefined) {
             // FIX: backendTotalAmount is treated as per-copy base from backend preview.
             // Always multiply by current UI copies to match Dashboard behavior.
-            const total = backendTotalAmount * copies;
+            const total = Math.ceil(backendTotalAmount * copies);
             const pricePerPage = pageCount > 0 ? (total / copies / pageCount) : 0;
             return {
                 pricePerPage: pricePerPage,
@@ -631,7 +838,8 @@ document.addEventListener('DOMContentLoaded', function () {
             pricePerPage = isDouble ? shopPricing.bw_double : shopPricing.bw_single;
         }
 
-        const total = pageCount * pricePerPage * copies;
+        // CEILING ROUNDING: Round up to next whole rupee (e.g. 4.5 -> 5, 10.1 -> 11, 10 -> 10)
+        const total = Math.ceil(pageCount * pricePerPage * copies);
 
         return {
             pricePerPage: pricePerPage,
@@ -700,7 +908,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 uploadPricePerPage.style.width = 'auto';
                 uploadPricePerPage.textContent = `₹${price.pricePerPage.toFixed(2)}`;
             }
-            uploadTotalAmount.textContent = `₹${price.total.toFixed(2)}`;
+            uploadTotalAmount.textContent = `₹${price.total.toFixed(0)}`;
             uploadPriceInfo.style.display = 'block';
         }
 
@@ -774,7 +982,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 xeroxPricePerPage.style.width = 'auto';
                 xeroxPricePerPage.textContent = `₹${price.pricePerPage.toFixed(2)}`;
             }
-            xeroxTotalAmount.textContent = `₹${price.total.toFixed(2)}`;
+            xeroxTotalAmount.textContent = `₹${price.total.toFixed(0)}`;
             xeroxPriceInfo.style.display = 'block';
         }
 
@@ -832,7 +1040,7 @@ document.addEventListener('DOMContentLoaded', function () {
             previewPricePerPage.style.width = 'auto';
             previewPricePerPage.textContent = `₹${price.pricePerPage.toFixed(2)}`;
         }
-        previewTotalAmount.textContent = `₹${price.total.toFixed(2)}`;
+        previewTotalAmount.textContent = `₹${price.total.toFixed(0)}`;
         previewPriceInfo.style.display = 'block';
     }
 

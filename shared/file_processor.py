@@ -1491,6 +1491,10 @@ def normalize_document_for_preview(file_path, file_type):
     """
     if file_type == 'pdf':
         return file_path
+
+    # Bypass: images are handled natively by PIL/ReportLab — no LibreOffice needed
+    if file_type.lower() in {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff'}:
+        return file_path
         
     try:
         # Create cache directory
@@ -2209,6 +2213,7 @@ def calculate_billing(color_mode, print_side, copies, layout_pages, selected_pag
     """
     Shared billing calculation logic for both PRINT and XEROX flows.
     """
+    import math
     is_double = print_side.lower() in ['double', 'duplex']
     
     bw_single = pricing.get('bw_single', 2.0)
@@ -2258,6 +2263,8 @@ def calculate_billing(color_mode, print_side, copies, layout_pages, selected_pag
         color_sheets = math.ceil(color_sheets / 2)
                 
     total_amount = (color_sheets * rate_color + bw_sheets * rate_bw) * copies
+    # CEILING ROUNDING: Round up to next whole rupee (e.g. 4.5 -> 5, 10.1 -> 11, 10 -> 10)
+    total_amount = math.ceil(total_amount)
     return {
         'total_amount': total_amount,
         'color_sheets': color_sheets,

@@ -24,5 +24,6 @@ RUN mkdir -p /app/uploads/previews /app/uploads/temp
 ENV PORT=10000
 ENV PYTHONUNBUFFERED=1
 ENV HOME=/tmp
+ENV TMPDIR=/tmp
 
-CMD ["gunicorn", "--worker-class", "eventlet", "--workers", "1", "--timeout", "180", "--no-sendfile", "web_interface.app:app", "--bind", "0.0.0.0:10000"]
+CMD ["gunicorn", "--workers", "1", "--threads", "4", "--timeout", "180", "--no-sendfile", "web_interface.app:app", "--bind", "0.0.0.0:10000"]
