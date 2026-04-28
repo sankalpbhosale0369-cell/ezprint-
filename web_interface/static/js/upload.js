@@ -246,10 +246,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (files.length === 0) return;
 
-        // Check if all files are images (defensive: MIME OR extension)
+        // Check if all files are images
         const imageFiles = files.filter(f =>
             f.type.startsWith('image/') ||
-            /\.(png|jpe?g|gif|bmp|webp|tiff)$/i.test(f.name)
+            /\.(png|jpe?g|gif|bmp|tiff)$/i.test(f.name)
         );
 
         // Check if all files are PDFs (for multi-PDF merge)
@@ -264,8 +264,8 @@ document.addEventListener('DOMContentLoaded', function () {
             /\.docx$/i.test(f.name)
         );
 
-        // If ALL files are images (2+), combine client-side into PDF (stable legacy path)
-        if (files.length > 1 && imageFiles.length === files.length) {
+        // If multiple images, combine into PDF
+        if (imageFiles.length > 1) {
             console.log(`Combining ${imageFiles.length} images into PDF...`);
 
             // Show loading
