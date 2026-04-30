@@ -18,7 +18,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.db import models
 from app.db.session import get_db
@@ -56,7 +56,9 @@ router = APIRouter()
 
 def _get_job_for_tenant(db: Session, job_id: str, tenant_id: str) -> models.PrintJob:
     job = db.scalars(
-        select(models.PrintJob).where(
+        select(models.PrintJob)
+        .options(selectinload(models.PrintJob.files))
+        .where(
             models.PrintJob.job_id == job_id,
             models.PrintJob.tenant_id == tenant_id,
         )
@@ -546,7 +548,18 @@ def get_job_files(
             status_code=status.HTTP_410_GONE,
             detail="Job assets have been cleaned up",
         )
-    files = sorted(job.files, key=lambda f: f.sort_order)
+    # Explicit query so we always return every row in `print_job_files`, even if
+    # the ORM relationship is stale or not loaded the way callers expect.
+    files = list(
+        db.scalars(
+            select(models.PrintJobFile)
+            .where(
+                models.PrintJobFile.print_job_id == job.id,
+                models.PrintJobFile.tenant_id == principal.tenant_id,
+            )
+            .order_by(models.PrintJobFile.sort_order)
+        ).all()
+    )
     if not files and job.object_key:
         url = storage.presign_get(
             principal.tenant_id,

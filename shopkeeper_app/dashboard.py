@@ -8759,6 +8759,14 @@ class DashboardWindow(QMainWindow):
                 else:
                     # Keep settings in sync (e.g. page_range) if the row predates a fuller payload.
                     try:
+                        if job_data.get('filename'):
+                            existing.filename = job_data.get('filename')
+                        if job_data.get('file_type'):
+                            existing.file_type = job_data.get('file_type')
+                        if job_data.get('download_url'):
+                            existing.file_path = job_data.get('download_url')
+                        if job_data.get('file_size') is not None:
+                            existing.file_size = job_data.get('file_size')
                         if job_data.get('page_range') is not None:
                             existing.page_range = job_data.get('page_range')
                         if job_data.get('total_pages') is not None:
@@ -9674,10 +9682,19 @@ class DashboardWindow(QMainWindow):
             if not ok or not data:
                 logger.warning("Could not fetch document manifest for job=%s err=%s", job.job_id, err)
                 return []
-            documents = data.get("files") or []
-            if len(documents) <= 1:
+            documents = sorted(
+                (data.get("files") or []),
+                key=lambda d: d.get("sort_order", 0),
+            )
+            if not documents:
                 return []
-            return sorted(documents, key=lambda d: d.get("sort_order", 0))
+            # Single-file jobs use the legacy one-shot path (spooler polling, etc.).
+            # Bundled jobs (`file_type == multi`) must use the manifest even if the
+            # API returned one row due to a transient inconsistency.
+            is_multi = (getattr(job, "file_type", "") or "").lower() == "multi"
+            if len(documents) <= 1 and not is_multi:
+                return []
+            return documents
         except Exception as exc:
             logger.exception("Failed fetching document manifest for job=%s", job.job_id)
             return []
