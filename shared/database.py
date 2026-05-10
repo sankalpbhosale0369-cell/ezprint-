@@ -70,6 +70,9 @@ class PrintJob(Base):
     # Pricing
     amount = Column(Float, nullable=True)  # Total price for this print job
     
+    # Billing metadata
+    color_pages = Column(Text, nullable=True)  # JSON list of user-selected color page numbers (1-indexed)
+    
     # Asset Management
     cloudinary_public_id = Column(String(255), nullable=True)
     preview_paths = Column(Text, nullable=True)  # Serialized JSON list of preview paths
@@ -242,6 +245,8 @@ def migrate_schema():
                     columns_to_add.append(('assets_delete_scheduled', 'BOOLEAN DEFAULT 0'))
             if 'assets_delete_attempted_at' not in existing_cols:
                 columns_to_add.append(('assets_delete_attempted_at', 'TIMESTAMP'))
+            if 'color_pages' not in existing_cols:
+                columns_to_add.append(('color_pages', 'TEXT'))
             
             # Add missing columns
             with engine.connect() as conn:

@@ -1511,6 +1511,56 @@ class PrintJobWorker(QThread):
             self.job_failed.emit(self.job_id, message)
 
 
+class _PrintRoutingWorker(QThread):
+    """Phase 1A: Move get_authorized_printers() off the Qt UI thread.
+    
+    This lightweight worker runs printer enumeration and routing in a
+    background thread, returning results via Qt signal. All UI updates
+    remain on the main thread in the connected slot.
+    
+    Thread-safety notes:
+    - get_authorized_printers() uses thread_safe_discovery (designed for threading)
+    - _infer_printer_capabilities() creates its own SessionLocal() per call
+    - win32print API calls are thread-safe (Windows COM)
+    - The shared self.db in PrinterManager is accessed briefly; the worker
+      runs only when the user clicks PRINT, so contention is negligible.
+    """
+    routing_complete = pyqtSignal(object, object)  # (selected_printer_name, error_message)
+
+    def __init__(self, printer_manager, job, parent=None):
+        super().__init__(parent)
+        self.printer_manager = printer_manager
+        self.job = job
+
+    def run(self):
+        import time as _time
+        _t_pipeline_start = _time.perf_counter()
+        try:
+            # This is the blocking call we are moving off the UI thread.
+            # get_authorized_printers() internally calls:
+            #   - get_available_printers() → thread_safe_discovery (cached)
+            #   - DB query for active printers
+            #   - _deduplicate_printers()
+            _t0 = _time.perf_counter()
+            _available = self.printer_manager.get_authorized_printers()
+            logger.info(f"[PERF] RoutingWorker: get_authorized_printers() took {_time.perf_counter()-_t0:.3f}s")
+
+            # select_printer_for_job() previously called get_authorized_printers()
+            # again internally. Now we pass _available to eliminate that duplicate.
+            # _infer_printer_capabilities() still runs inside (win32print calls),
+            # but printer enumeration happens only once.
+            _t0 = _time.perf_counter()
+            selected, error = self.printer_manager.select_printer_for_job(self.job, available_printers=_available)
+            logger.info(f"[PERF] RoutingWorker: select_printer_for_job() took {_time.perf_counter()-_t0:.3f}s")
+
+            logger.info(f"[PERF] RoutingWorker: TOTAL PIPELINE took {_time.perf_counter()-_t_pipeline_start:.3f}s → selected='{selected}' error='{error}'")
+            self.routing_complete.emit(selected, error)
+        except Exception as e:
+            logger.error(f"_PrintRoutingWorker error: {e}")
+            logger.info(f"[PERF] RoutingWorker: TOTAL PIPELINE took {_time.perf_counter()-_t_pipeline_start:.3f}s (EXCEPTION)")
+            self.routing_complete.emit(None, f"Routing check failed: {str(e)}")
+
+
 class DashboardKPIWorker(QThread):
     """Worker thread for fetching and calculating Dashboard KPIs and analytics OFF the UI thread"""
     kpi_data_ready = pyqtSignal(dict)
@@ -1577,7 +1627,8 @@ class DashboardKPIWorker(QThread):
                         orientation=j.get('orientation'),
                         print_side=j.get('print_side'),
                         color_mode=j.get('color_mode'),
-                        layout_pages=j.get('layout_pages', 1)
+                        layout_pages=j.get('layout_pages', 1),
+                        color_pages=j.get('color_pages')  # Phase 3E: Include for Color Page Range display
                     )
                     all_jobs_objs.append(obj)
                 api_success = True
@@ -1673,6 +1724,97 @@ class DashboardKPIWorker(QThread):
             logger.error(traceback.format_exc())
             self.kpi_data_ready.emit({"error": str(e)})
 
+# ════════════════════════════════════════════════════════════════════════════════
+# Phase 3E: Color Page Range Display Helper (module-level utility)
+# ════════════════════════════════════════════════════════════════════════════════
+# Converts a JSON list of 1-indexed color page numbers into a compact
+# display string. Uses the SAME color_pages source-of-truth as:
+#   - calculate_billing() (shared/file_processor.py)
+#   - generate_final_print_pdf() (shared/file_processor.py)
+#   - select_printer_for_job() (shopkeeper_app/printer_manager.py)
+#
+# This is DISPLAY-ONLY — no billing, routing, rendering, or DB changes.
+#
+# Rollback: Delete this function + the add_detail_row() call in init_ui().
+#           Zero impact on any existing flow.
+# ════════════════════════════════════════════════════════════════════════════════
+
+def _format_compact_page_ranges(pages):
+    """Convert a sorted list of page numbers into compact range notation.
+    
+    Examples:
+        [1, 2, 3, 5, 6, 9]  →  "1-3,5-6,9"
+        [1]                  →  "1"
+        [3, 5, 7]            →  "3,5,7"
+        []                   →  ""
+    
+    Args:
+        pages: list of int, sorted 1-indexed page numbers.
+    
+    Returns:
+        str: Compact range string.
+    """
+    if not pages:
+        return ''
+    sorted_pages = sorted(set(int(p) for p in pages if isinstance(p, (int, float)) and p > 0))
+    if not sorted_pages:
+        return ''
+    ranges = []
+    start = end = sorted_pages[0]
+    for p in sorted_pages[1:]:
+        if p == end + 1:
+            end = p
+        else:
+            ranges.append(str(start) if start == end else f"{start}-{end}")
+            start = end = p
+    ranges.append(str(start) if start == end else f"{start}-{end}")
+    return ','.join(ranges)
+
+
+def _format_color_page_range_display(color_mode, color_pages_json):
+    """Determine the Color Page Range display text for a print job.
+    
+    Display rules:
+        CASE 1 — Mixed: color_pages exist + color_mode != B&W → "1-3,5-6,9"
+        CASE 2 — Full Color: color_mode == Color + no color_pages → "All Pages"
+        CASE 3 — Full B&W: color_mode == B&W → "None"
+    
+    Gracefully handles:
+        - None / empty color_pages
+        - Malformed JSON
+        - Legacy jobs without color_pages metadata
+    
+    Args:
+        color_mode: str, e.g. "Color", "Black & White", or None.
+        color_pages_json: str (JSON list) or None.
+    
+    Returns:
+        str: Display text for the Color Page Range field.
+    """
+    _cm = (color_mode or '').strip()
+    
+    # CASE 3: Full B&W
+    if _cm == 'Black & White' or not _cm:
+        return 'None'
+    
+    # Try to parse color_pages JSON
+    if color_pages_json:
+        try:
+            import json as _json_cprd
+            _parsed = _json_cprd.loads(color_pages_json) if isinstance(color_pages_json, str) else color_pages_json
+            if isinstance(_parsed, (list, tuple, set)) and len(_parsed) > 0:
+                # CASE 1: Mixed job — format compact ranges
+                compact = _format_compact_page_ranges(_parsed)
+                if compact:
+                    return compact
+        except Exception:
+            # Malformed JSON — fall through to CASE 2
+            pass
+    
+    # CASE 2: Full Color (no specific pages designated)
+    return 'All Pages'
+
+
 class JobPopupDialog(QDialog):
     """Simple, non-blocking popup notification for new print jobs"""
     def __init__(self, job, parent_dashboard):
@@ -1686,6 +1828,11 @@ class JobPopupDialog(QDialog):
         self.routing_error_message = None
         self.printer_status = "Online"  # Track real-time status (Offline Warning Requirement)
         
+        # Phase 3C Lite: Mixed routing preview (None = normal single-printer job)
+        self.mixed_routing_info = None
+        # Phase 3F: Full mixed validation result (dict with is_mixed, valid, missing, message)
+        self.mixed_validation = None
+        
         # Initial routing check to determine printer FOR THIS JOB (Objective 1)
         printer_manager = getattr(self.dashboard, 'printer_manager', None)
         if printer_manager:
@@ -1694,8 +1841,35 @@ class JobPopupDialog(QDialog):
                 available_printers_raw = printer_manager.get_authorized_printers()
                 available_printers = [p.get('name') for p in available_printers_raw if p.get('name')]
                 
-                # Capture per-job routing result (now strictly enforces authorization)
-                self.routed_printer_name, self.routing_error_message = printer_manager.select_printer_for_job(self.job)
+                # Phase 3F: Run authoritative mixed validation FIRST.
+                # This determines whether the job is mixed and whether both
+                # required printers are available.
+                if hasattr(printer_manager, 'validate_mixed_printer_requirements'):
+                    self.mixed_validation = printer_manager.validate_mixed_printer_requirements(self.job)
+                
+                _is_mixed_job = self.mixed_validation and self.mixed_validation.get('is_mixed')
+                
+                if _is_mixed_job and self.mixed_validation.get('valid'):
+                    # Both printers present — populate mixed_routing_info for dual-printer UI
+                    self.mixed_routing_info = {
+                        'color_printer': self.mixed_validation['color_printer'],
+                        'bw_printer': self.mixed_validation['bw_printer'],
+                        'color_range': self.mixed_validation['color_range'],
+                        'bw_range': self.mixed_validation['bw_range'],
+                    }
+                    # For mixed-valid jobs, routed_printer_name is set to color printer
+                    # (to satisfy the existing button-enable guard at line 2272).
+                    self.routed_printer_name = self.mixed_validation['color_printer']
+                    logger.info(f"MIXED UI: Detected valid mixed job {self.job.job_id[:8]} for popup display")
+                elif _is_mixed_job and not self.mixed_validation.get('valid'):
+                    # Phase 3F HARD BLOCK: Mixed job with missing printer(s)
+                    self.routing_error_message = self.mixed_validation.get('message')
+                    self.routed_printer_name = None  # Ensures Print button is disabled
+                    logger.warning(f"MIXED UI: Blocked mixed job {self.job.job_id[:8]} — "
+                                   f"missing={self.mixed_validation.get('missing')}")
+                else:
+                    # Not a mixed job — use standard single-printer routing
+                    self.routed_printer_name, self.routing_error_message = printer_manager.select_printer_for_job(self.job)
                 
                 # Fetch real-time status for the routed printer
                 if self.routed_printer_name:
@@ -1854,6 +2028,17 @@ class JobPopupDialog(QDialog):
         # Color Mode
         add_detail_row("Color Mode", safe_text(getattr(self.job, 'color_mode', None), "-"))
         
+        # Phase 3E: Color Page Range (display-only, directly below Color Mode)
+        # Uses the same color_pages JSON source-of-truth as billing/routing/rendering.
+        # Display rules:
+        #   CASE 1 — Mixed: color_pages exist + color_mode != B&W → compact ranges (e.g. "1-3,5-6,9")
+        #   CASE 2 — Full Color: color_mode == Color + no color_pages → "All Pages"
+        #   CASE 3 — Full B&W: color_mode == B&W → "None"
+        _color_mode_val = getattr(self.job, 'color_mode', None) or ''
+        _color_pages_raw = getattr(self.job, 'color_pages', None)
+        _color_range_display = _format_color_page_range_display(_color_mode_val, _color_pages_raw)
+        add_detail_row("Color Page Range", _color_range_display)
+        
         # Pages
         total_pages = getattr(self.job, 'total_pages', None)
         pages_display = str(total_pages) if total_pages is not None else "All"
@@ -1946,6 +2131,33 @@ class JobPopupDialog(QDialog):
                 border: 1px solid #fecaca;
                 border-radius: 6px;
             """)
+        elif self.mixed_routing_info:
+            # Phase 3C Lite: Show dual-printer layout for mixed jobs
+            mi = self.mixed_routing_info
+            c_name = mi.get('color_printer', '?')
+            b_name = mi.get('bw_printer', '?')
+            c_range = mi.get('color_range', '')
+            b_range = mi.get('bw_range', '')
+            # Truncate long printer names for popup readability
+            c_short = c_name[:22] + '..' if len(c_name) > 24 else c_name
+            b_short = b_name[:22] + '..' if len(b_name) > 24 else b_name
+            self.printer_label.setText(
+                f"Printers:\n"
+                f"Color: {c_short} : {c_range}\n"
+                f"B&W: {b_short} : {b_range}"
+            )
+            self.printer_label.setAlignment(Qt.AlignLeft)
+            self.printer_label.setStyleSheet("""
+                font-weight: 600;
+                color: #334155;
+                font-size: 12px;
+                padding: 6px 8px;
+                background-color: #f0fdf4;
+                border: 1px solid #bbf7d0;
+                border-radius: 6px;
+                line-height: 1.4;
+            """)
+            logger.info(f"MIXED UI: Popup showing dual printers for job {self.job.job_id[:8]}")
         else:
             # Show routed printer name (Objective 1)
             # Use display_name if available for UI; routed_printer_name may be spooler name
@@ -2100,6 +2312,31 @@ class JobPopupDialog(QDialog):
                     printer_manager = getattr(self.dashboard, 'printer_manager', None)
                     if printer_manager:
                         try:
+                            # Phase 3F: Re-validate mixed requirements at auto-print time
+                            if hasattr(printer_manager, 'validate_mixed_printer_requirements'):
+                                _mv = printer_manager.validate_mixed_printer_requirements(self.job)
+                                if _mv.get('is_mixed') and not _mv.get('valid'):
+                                    # HARD BLOCK: Mixed job with missing printer
+                                    _block_msg = _mv.get('message', 'Mixed printer not available.')
+                                    self.routing_error_message = _block_msg
+                                    self.routed_printer_name = None
+                                    self.printer_label.setText(_block_msg)
+                                    self.printer_label.setStyleSheet("""
+                                        color: #dc2626;
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        padding: 4px;
+                                        background-color: #fef2f2;
+                                        border: 1px solid #fecaca;
+                                        border-radius: 6px;
+                                    """)
+                                    self.error_label.hide()
+                                    self.print_btn.show()
+                                    self.print_btn.setText("RETRY")
+                                    logger.warning(f"Auto-print BLOCKED by mixed validation for job "
+                                                   f"{self.job.job_id}: {_block_msg}")
+                                    return
+
                             # Get available printers for routing
                             available_printers_raw = printer_manager.get_available_printers()
                             available_printers = [p.get('name') for p in available_printers_raw if p.get('name')]
@@ -2172,23 +2409,55 @@ class JobPopupDialog(QDialog):
             self.accept()
             return
 
-        # ===== ROUTING ERROR CHECK (Updated for per-job display) =====
+        # ===== PHASE 1A: ROUTING CHECK OFF UI THREAD =====
+        # Previously, get_authorized_printers() and select_printer_for_job()
+        # ran synchronously here on the main thread, blocking the UI when
+        # win32print.OpenPrinter() was slow (e.g. network printers).
+        # Now we delegate to _PrintRoutingWorker and handle results in
+        # _on_routing_complete() via Qt signal (main-thread safe).
         printer_manager = getattr(self.dashboard, 'printer_manager', None)
-        if printer_manager:
-            try:
-                # FIX 3: POPUP UI MUST USE ROUTING RESULT ONLY (Authorized printers)
-                available_printers_raw = printer_manager.get_authorized_printers()
-                
-                # Call routing function (internally uses get_authorized_printers)
-                selected, error = printer_manager.select_printer_for_job(self.job)
-                
-                # Store result
-                self.routed_printer_name = selected
-                self.routing_error_message = error
-                    
-                if error:
-                    # Show error in printer label position (Objective 4)
-                    self.printer_label.setText(error)
+        if not printer_manager:
+            # No printer manager — fall through to print directly (legacy path)
+            if hasattr(self.dashboard, 'print_job'):
+                self.dashboard.print_job(self.job)
+            self._update_cancel_visibility("Printing")
+            self.print_btn.setEnabled(False)
+            self.print_btn.setText("PRINTING...")
+            return
+
+        # Disable button immediately to prevent double-click
+        self.print_btn.setEnabled(False)
+        self.print_btn.setText("Checking...")
+
+        # Launch background routing worker
+        self._routing_worker = _PrintRoutingWorker(printer_manager, self.job, parent=self)
+        self._routing_worker.routing_complete.connect(self._on_routing_complete)
+        self._routing_worker.start()
+
+    def _on_routing_complete(self, selected, error):
+        """Phase 1A: Handle routing result on the main Qt thread (signal callback).
+        
+        This method contains the EXACT same logic that was previously inline
+        in on_print_clicked(), ensuring identical behavior. The only difference
+        is that the blocking printer enumeration has already completed in the
+        background worker thread.
+        """
+        try:
+            # Safety: if popup was closed while worker was running, do nothing
+            if sip.isdeleted(self):
+                return
+
+            # Phase 3F: Re-validate mixed requirements at print-click time.
+            # This catches the case where a printer was disconnected between
+            # popup creation and the user clicking Print.
+            printer_manager = getattr(self.dashboard, 'printer_manager', None)
+            if printer_manager and hasattr(printer_manager, 'validate_mixed_printer_requirements'):
+                _mv = printer_manager.validate_mixed_printer_requirements(self.job)
+                if _mv.get('is_mixed') and not _mv.get('valid'):
+                    _block_msg = _mv.get('message', 'Mixed printer not available.')
+                    self.routing_error_message = _block_msg
+                    self.routed_printer_name = None
+                    self.printer_label.setText(_block_msg)
                     self.printer_label.setStyleSheet("""
                         color: #dc2626;
                         font-size: 13px;
@@ -2198,31 +2467,56 @@ class JobPopupDialog(QDialog):
                         border: 1px solid #fecaca;
                         border-radius: 6px;
                     """)
-                    self.error_label.hide() # Do not duplicate messages
+                    self.error_label.hide()
                     self.print_btn.setEnabled(False)
                     self.print_btn.setText("No Printer")
-                    logger.warning(f"Routing error for job {self.job.job_id}: {error}")
+                    logger.warning(f"Print BLOCKED by mixed validation for job "
+                                   f"{self.job.job_id}: {_block_msg}")
                     return
-                else:
-                    # Success - update printer name
-                    self.printer_label.setText(f"Printer: {selected or 'System Default'}")
-                    self.printer_label.setStyleSheet("font-weight: 700; color: #334155; font-size: 14px;")
-                    self.error_label.hide()
-                    
-            except Exception as e:
-                logger.warning(f"Error during manual print routing check: {e}")
+
+            # Store result (same as before)
+            self.routed_printer_name = selected
+            self.routing_error_message = error
+
+            if error:
+                # Show error in printer label position (Objective 4)
+                self.printer_label.setText(error)
+                self.printer_label.setStyleSheet("""
+                    color: #dc2626;
+                    font-size: 13px;
+                    font-weight: 600;
+                    padding: 4px;
+                    background-color: #fef2f2;
+                    border: 1px solid #fecaca;
+                    border-radius: 6px;
+                """)
+                self.error_label.hide()  # Do not duplicate messages
+                self.print_btn.setEnabled(False)
+                self.print_btn.setText("No Printer")
+                logger.warning(f"Routing error for job {self.job.job_id}: {error}")
+                return
+            else:
+                # Success - update printer name
+                self.printer_label.setText(f"Printer: {selected or 'System Default'}")
+                self.printer_label.setStyleSheet("font-weight: 700; color: #334155; font-size: 14px;")
+                self.error_label.hide()
+        except Exception as e:
+            logger.warning(f"Error during manual print routing check: {e}")
+            if not sip.isdeleted(self):
                 self.error_label.setText(f"Routing check error: {e}")
                 self.error_label.show()
-                return
+                self.print_btn.setEnabled(True)
+                self.print_btn.setText("Print")
+            return
 
-        # ===== EXISTING PRINT FLOW =====
+        # ===== EXISTING PRINT FLOW (unchanged) =====
         # Call existing print trigger logic
         if hasattr(self.dashboard, 'print_job'):
             self.dashboard.print_job(self.job)
-        
+
         # Hide cancel button immediately when printing starts
         self._update_cancel_visibility("Printing")
-        
+
         # Disable button after click to prevent double-printing
         self.print_btn.setEnabled(False)
         self.print_btn.setText("PRINTING...")
@@ -2288,7 +2582,9 @@ class JobPopupDialog(QDialog):
                         orientation=self.job.orientation or 'Portrait',
                         layout_pages=self.job.layout_pages or 1,
                         color_mode=self.job.color_mode or 'Color',
-                        page_range=self.job.page_range or ''
+                        page_range=self.job.page_range or '',
+                        # Phase 3D: Pass color_pages for per-page color rendering
+                        color_pages=getattr(self.job, 'color_pages', None),
                     )
                     from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
                     QMetaObject.invokeMethod(self, "_show_preview_window",
@@ -8554,7 +8850,8 @@ class DashboardWindow(QMainWindow):
             logger.info(f"TRACE H: Dashboard refreshing job list after WebSocket for job_id={job_id}")
             
             # Load print jobs in main thread to refresh the UI immediately
-            self.load_print_jobs()
+            # Phase 1B: force_refresh=True bypasses debounce for real-time events
+            self.load_print_jobs(force_refresh=True)
             logger.info(f"✓ Refreshed job list after receiving new_print_job notification for job {job_id}")
             
             # If in auto mode, automatically print the new job
@@ -8680,7 +8977,16 @@ class DashboardWindow(QMainWindow):
         """Load print jobs from database (Scroll-preserving)"""
         if self._is_refreshing_jobs:
             return
-            
+
+        # Phase 1B Fix 1: Debounce — skip if loaded within last 3 seconds
+        # Manual refresh (F5) and force_refresh=True bypass the debounce.
+        import time as _time
+        _now = _time.monotonic()
+        force = kwargs.get('force_refresh', False)
+        if not force and hasattr(self, '_last_jobs_load_time'):
+            if (_now - self._last_jobs_load_time) < 3.0:
+                return
+
         # Determine if we should preserve scroll position (default True for non-signal calls)
         # Signals like textChanged or currentIndexChanged pass arguments, which we use to detect filter changes
         preserve_scroll = kwargs.get('preserve_scroll', len(args) == 0)
@@ -8699,6 +9005,7 @@ class DashboardWindow(QMainWindow):
                 return
             
             self._is_refreshing_jobs = True
+            self._last_jobs_load_time = _now  # Phase 1B: record load timestamp
             
             # Create a new database session for this operation
             db_session = SessionLocal()
@@ -8801,9 +9108,9 @@ class DashboardWindow(QMainWindow):
                     
                 return True
 
-            # Debug logging
-            logger.info(f"Applying filters - Date: {date_filter}, Status: {status_filter}, Search: '{term}'")
-            logger.info(f"Total jobs before filtering: {len(query)}")
+            # Phase 1B Fix 4: Downgrade per-cycle logs to debug (fires every 10s)
+            logger.debug(f"Applying filters - Date: {date_filter}, Status: {status_filter}, Search: '{term}'")
+            logger.debug(f"Total jobs before filtering: {len(query)}")
             
             filtered_jobs = []
             for j in query:
@@ -8832,9 +9139,22 @@ class DashboardWindow(QMainWindow):
                 type_text = f"{'B&W' if color.lower().startswith('black') else 'Color'} • {side}"
                 filtered_jobs.append((j, type_text))
             
-            logger.info(f"Total jobs after filtering: {len(filtered_jobs)}")
+            logger.debug(f"Total jobs after filtering: {len(filtered_jobs)}")
 
             # Sorting removed - jobs will be displayed in default order (newest first)
+
+            # Phase 1B Fix 5: Skip full card rebuild if data fingerprint unchanged.
+            # Fingerprint = tuple of (job_id, status) for each filtered job.
+            # If fingerprint matches previous load, skip expensive widget destroy/recreate.
+            _new_fingerprint = tuple((j.job_id, j.status) for j, _ in filtered_jobs)
+            _old_fingerprint = getattr(self, '_jobs_fingerprint', None)
+            if _new_fingerprint == _old_fingerprint and not force:
+                # Data unchanged — skip expensive UI rebuild
+                logger.debug("Phase 1B: job fingerprint unchanged, skipping card rebuild")
+                db_session.close()
+                self._is_refreshing_jobs = False
+                return
+            self._jobs_fingerprint = _new_fingerprint
 
             # Keep table for backward compatibility (hidden)
             self.jobs_table.setRowCount(len(filtered_jobs))
@@ -9352,7 +9672,11 @@ class DashboardWindow(QMainWindow):
             'orientation': job.orientation or 'Portrait',
             'print_side': job.print_side or 'Single',
             'color_mode': job.color_mode or 'Color',
-            'layout_pages': job.layout_pages or 1
+            'layout_pages': job.layout_pages or 1,
+            # Phase 3B: Pass color_pages metadata for mixed printer routing.
+            # This is a JSON string of 1-indexed page numbers designated as color.
+            # If absent/None, the printer manager uses single-dispatch (backward compatible).
+            'color_pages': getattr(job, 'color_pages', None),
         }
 
         # Start print worker using silent settings-aware printing
@@ -9473,9 +9797,9 @@ class DashboardWindow(QMainWindow):
                 refresh_btn.setText("Refreshing...")
                 refresh_btn.setEnabled(False)
                 
-                # Load jobs
+                # Load jobs (bypass debounce for manual refresh)
                 if not getattr(self, '_suspend_jobs_refresh', False):
-                    self.load_print_jobs()
+                    self.load_print_jobs(force_refresh=True)
                 
                 # Restore button state
                 refresh_btn.setText(original_text)
@@ -9851,13 +10175,18 @@ class DashboardWindow(QMainWindow):
     
     def timer_refresh(self):
         """Timer refresh - loads jobs and checks for auto-printing"""
+        # Phase 1B Fix 3: If poll_timer is also running, it duplicates load_print_jobs.
+        # Stop it here since the 10s timer already covers the same work.
+        if hasattr(self, 'poll_timer') and self.poll_timer.isActive():
+            logger.debug("Phase 1B: stopping redundant poll_timer (timer already active)")
+            self.poll_timer.stop()
+
         if not getattr(self, '_suspend_jobs_refresh', False):
             # TRACE K: Dashboard refreshed job list via polling
-            # Note: We'll log specific job_id in load_print_jobs if we can identify it
-            logger.info("TRACE K: Dashboard refreshing job list via polling")
+            logger.debug("TRACE K: Dashboard refreshing job list via polling")
             self.load_print_jobs()
         
-        # Update dashboard KPIs and status indicators
+        # Phase 1B Fix 2: Only launch KPI worker when actually on dashboard page
         if self.current_page == "dashboard":
             self.update_dashboard_kpis()
 

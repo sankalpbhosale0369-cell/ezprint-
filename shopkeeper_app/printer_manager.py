@@ -60,6 +60,12 @@ class PrinterManager:
         # {job_id: {'printer': str, 'process': subprocess.Popen, 'type': str}}
         self.active_jobs = {}
         
+        # Phase 3C Lite: Mixed dispatch routing metadata for dashboard visibility.
+        # Populated by _dispatch_mixed_print(), read by JobPopupDialog.
+        # {job_id: {'color_printer': str, 'bw_printer': str,
+        #           'color_range': str, 'bw_range': str}}
+        self.mixed_dispatch_info = {}
+        
         # Initialize in-memory printer capability registry
         # Maps printer_name -> {"is_color": bool, "is_duplex": bool, "type": str}
         self.printer_capabilities = {}
@@ -292,6 +298,8 @@ class PrinterManager:
             dict: Capability dict with keys: is_color, is_duplex, type
                   Returns None if capabilities cannot be inferred
         """
+        import time as _time
+        _t_infer_start = _time.perf_counter()
         if not printer_name:
             return None
         
@@ -300,9 +308,13 @@ class PrinterManager:
         driver_is_color = None
         h = None
         try:
+            _t0 = _time.perf_counter()
             h = win32print.OpenPrinter(printer_name)
+            logger.info(f"[PERF] OpenPrinter('{printer_name}') [color] took {_time.perf_counter()-_t0:.3f}s")
             # PRINTER_INFO_2 (level 2) contains common driver info and default devmode
+            _t0 = _time.perf_counter()
             info = win32print.GetPrinter(h, 2)
+            logger.info(f"[PERF] GetPrinter('{printer_name}', 2) [color] took {_time.perf_counter()-_t0:.3f}s")
             devmode = info.get('pDevMode')
             
             # Method A: Check DEVMODE setting (DMCOLOR_COLOR = 2)
@@ -313,7 +325,9 @@ class PrinterManager:
             # Method B: Query hardware capability directly via DeviceCapabilities
             if driver_is_color is None:
                 # DC_COLORDEVICE (32) returns 1 if device supports color
+                _t0 = _time.perf_counter()
                 res = win32print.DeviceCapabilities(printer_name, info.get('pPortName', ''), win32con.DC_COLORDEVICE, None, None)
+                logger.info(f"[PERF] DeviceCapabilities('{printer_name}', DC_COLORDEVICE) took {_time.perf_counter()-_t0:.3f}s")
                 if res > 0:
                     driver_is_color = True
                 else:
@@ -337,12 +351,18 @@ class PrinterManager:
         driver_is_duplex = None
         h_duplex = None
         try:
+            _t0 = _time.perf_counter()
             h_duplex = win32print.OpenPrinter(printer_name)
+            logger.info(f"[PERF] OpenPrinter('{printer_name}') [duplex] took {_time.perf_counter()-_t0:.3f}s")
+            _t0 = _time.perf_counter()
             info_duplex = win32print.GetPrinter(h_duplex, 2)
+            logger.info(f"[PERF] GetPrinter('{printer_name}', 2) [duplex] took {_time.perf_counter()-_t0:.3f}s")
             port_name = info_duplex.get('pPortName', '')
+            _t0 = _time.perf_counter()
             res_duplex = win32print.DeviceCapabilities(
                 printer_name, port_name, 7, None, None
             )  # 7 = DC_DUPLEX
+            logger.info(f"[PERF] DeviceCapabilities('{printer_name}', DC_DUPLEX) took {_time.perf_counter()-_t0:.3f}s")
             if res_duplex > 0:
                 driver_is_duplex = True
             else:
@@ -359,6 +379,7 @@ class PrinterManager:
 
         user_duplex = None
         user_color = None
+        _t0 = _time.perf_counter()
         try:
             db = SessionLocal()
             printer_record = db.query(Printer).filter(
@@ -371,10 +392,13 @@ class PrinterManager:
             db.close()
         except Exception as e:
             logger.debug(f"Could not read user overrides for '{printer_name}': {e}")
+        logger.info(f"[PERF] DB override query for '{printer_name}' took {_time.perf_counter()-_t0:.3f}s")
 
         # 2. HEURISTIC-BASED DETECTION
         printer_name_upper = printer_name.upper()
         
+        _t_infer_total = _time.perf_counter() - _t_infer_start
+        logger.info(f"[PERF] _infer_printer_capabilities('{printer_name}') total took {_t_infer_total:.3f}s")
         # Check against known patterns
         for pattern, is_color, is_duplex, printer_type in self._printer_patterns:
             if pattern.upper() in printer_name_upper:
@@ -403,8 +427,11 @@ class PrinterManager:
             dict: Capability dict with keys: is_color, is_duplex, type
                   Returns None if printer not in registry
         """
+        import time as _time
+        _t0 = _time.perf_counter()
         # Check if already in registry
         if printer_name in self.printer_capabilities:
+            logger.info(f"[PERF] get_printer_capabilities('{printer_name}') CACHE HIT took {_time.perf_counter()-_t0:.3f}s")
             return self.printer_capabilities[printer_name]
         
         # If not in registry, try to infer capabilities
@@ -414,6 +441,7 @@ class PrinterManager:
             self.printer_capabilities[printer_name] = capabilities
             logger.debug(f"Inferred and cached capabilities for '{printer_name}': {capabilities}")
         
+        logger.info(f"[PERF] get_printer_capabilities('{printer_name}') CACHE MISS took {_time.perf_counter()-_t0:.3f}s")
         return capabilities
     
     def get_authorized_printers(self):
@@ -422,14 +450,20 @@ class PrinterManager:
         Returns list of printers that are both physically discovered AND marked as active in DB.
         This represents the 'Physical printers ∩ Dashboard active printers' requirement.
         """
+        import time as _time
+        _t_auth_start = _time.perf_counter()
         try:
             # 1. Get ALL physically discovered printers (normalized/deduplicated)
             # Use cached discovery to avoid UI thread blocking
+            _t0 = _time.perf_counter()
             physical_printers = self.get_available_printers()
+            logger.info(f"[PERF] get_available_printers() inside get_authorized took {_time.perf_counter()-_t0:.3f}s ({len(physical_printers)} printers)")
             
             # 2. Get ONLY active printers from Dashboard DB
+            _t0 = _time.perf_counter()
             self.db.expire_all() # Ensure fresh read
             db_active_printers = self.db.query(Printer).filter(Printer.is_active == True).all()
+            logger.info(f"[PERF] DB query for active printers took {_time.perf_counter()-_t0:.3f}s ({len(db_active_printers)} active)")
             
             # Use set for O(1) matching. Normalize to upper case for robustness.
             # printer_name in DB represents the user's connected canonical name
@@ -441,6 +475,7 @@ class PrinterManager:
                 if p.get('name', '').upper() in db_active_names:
                     authorized.append(p)
             
+            logger.info(f"[PERF] get_authorized_printers() total took {_time.perf_counter()-_t_auth_start:.3f}s ({len(authorized)} authorized)")
             return authorized
         except Exception as e:
             logger.error(f"Error getting authorized printers: {e}")
@@ -455,13 +490,19 @@ class PrinterManager:
         
         Args:
             job: PrintJob object with print_side and color_mode attributes
-            available_printers: Ignored (now uses authoritative get_authorized_printers)
+            available_printers: Pre-fetched authorized printer list (list of dicts).
+                                If None, fetches via get_authorized_printers().
+                                Pass this to avoid duplicate enumeration when the
+                                caller has already fetched the list.
             
         Returns:
             tuple: (selected_printer_name: str | None, error_message: str | None)
         """
+        import time as _time
+        _t_select_start = _time.perf_counter()
         # AUTHORITATIVE SOURCE: Only use printers explicitly connected in dashboard
-        authorized_printers_raw = self.get_authorized_printers()
+        # Use pre-fetched list if provided; otherwise fetch (preserves all existing callers)
+        authorized_printers_raw = available_printers if available_printers is not None else self.get_authorized_printers()
         candidates = [p.get('name') for p in authorized_printers_raw if p.get('name')]
         
         if not candidates:
@@ -533,6 +574,7 @@ class PrinterManager:
             
             # Select first available duplex printer
             selected_name, _ = duplex_candidates[0]
+            logger.info(f"[PERF] select_printer_for_job() total took {_time.perf_counter()-_t_select_start:.3f}s → '{selected_name}'")
             return (selected_name, None)
         
         else:  # print_side == 'Single'
@@ -545,6 +587,7 @@ class PrinterManager:
             if non_duplex_candidates:
                 # Prefer non-duplex printer
                 selected_name, _ = non_duplex_candidates[0]
+                logger.info(f"[PERF] select_printer_for_job() total took {_time.perf_counter()-_t_select_start:.3f}s → '{selected_name}'")
                 return (selected_name, None)
             else:
                 # Fallback to duplex printer (can print single-sided)
@@ -1023,7 +1066,9 @@ class PrinterManager:
                 orientation=orientation, 
                 layout_pages=layout_pages, 
                 color_mode=color_mode,
-                page_range=page_range
+                page_range=page_range,
+                # Phase 3D: Pass color_pages for per-page color rendering
+                color_pages=settings.get('color_pages'),
             )
             
             # CRITICAL FIX: If a new PDF was generated, it already has the page range applied.
@@ -1057,12 +1102,64 @@ class PrinterManager:
             logger.error(error_msg)
             raise PrinterError(error_msg)
 
-        # Handle WiFi/network printers using the processed PDF
-        if self._is_network_printer(target_printer):
-            # Update settings with effective values for network printer
-            network_settings = settings.copy()
-            network_settings['page_range'] = effective_page_range
-            return self._print_to_network_printer(nup_path, file_type, network_settings, job_id, printer_name=target_printer)
+        # FIX 2026-05-07: Network printer diversion REMOVED.
+        # The EnhancedNetworkPrinting path re-converted the already-correct PDF
+        # via Ghostscript (ps2write/pclmono) WITHOUT page-size params, causing
+        # commercial printers to print tiny/wrong in corner.
+        # All printers now use the same Sumatra → GDI path below, which sends
+        # the correct PDF through the Windows spooler (works for USB + network).
+        # ── Original block (preserved for audit) ──
+        # if self._is_network_printer(target_printer):
+        #     network_settings = settings.copy()
+        #     network_settings['page_range'] = effective_page_range
+        #     return self._print_to_network_printer(nup_path, file_type, network_settings, job_id, printer_name=target_printer)
+
+        # ===== PHASE 3B: MIXED COLOR/BW PRINTER SPLITTING =====
+        # Detect mixed jobs and activate split dispatch if:
+        #   1. color_pages metadata exists in settings
+        #   2. Both color AND B&W pages are present
+        #   3. Separate color and B&W printers are available
+        # Otherwise, fall through to existing single-dispatch path.
+        _color_pages_raw = settings.get('color_pages')
+        if _color_pages_raw and color_mode.lower() != 'black & white':
+            try:
+                import json as _json
+                if isinstance(_color_pages_raw, str):
+                    _color_pages_parsed = _json.loads(_color_pages_raw)
+                elif isinstance(_color_pages_raw, (list, set)):
+                    _color_pages_parsed = list(_color_pages_raw)
+                else:
+                    _color_pages_parsed = None
+
+                if _color_pages_parsed and isinstance(_color_pages_parsed, list):
+                    _color_pages_int = [int(p) for p in _color_pages_parsed if isinstance(p, (int, float)) and p > 0]
+                    if _color_pages_int:
+                        # Determine total pages in the nup_path PDF
+                        _mixed_total = 0
+                        try:
+                            if nup_path.lower().endswith('.pdf') and fitz:
+                                with fitz.open(nup_path) as _mdoc:
+                                    _mixed_total = len(_mdoc)
+                        except Exception:
+                            pass
+
+                        if _mixed_total > 0:
+                            # Stash effective_page_range for the dispatcher
+                            _mixed_settings = settings.copy()
+                            _mixed_settings['_effective_page_range'] = effective_page_range
+
+                            mixed_result = self._dispatch_mixed_print(
+                                nup_path, file_type, _mixed_settings,
+                                _color_pages_int, _mixed_total, job_id=job_id
+                            )
+                            if mixed_result is not None:
+                                # Mixed dispatch was executed (successfully or not)
+                                return mixed_result
+                            # mixed_result is None → fallback to single dispatch below
+                            logger.info("MIXED PRINT: Falling back to single-printer dispatch")
+            except Exception as _mixed_err:
+                logger.warning(f"MIXED PRINT: Detection/dispatch error (non-fatal, using single dispatch): {_mixed_err}")
+                # Fall through to existing single-dispatch path
 
         # Try SumatraPDF for PDFs (best silent printing experience)
         if nup_path.lower().endswith('.pdf'):
@@ -1409,6 +1506,424 @@ class PrinterManager:
                 del self.job_status_callbacks[job_id]
         except Exception as e:
             logger.error(f"Error stopping job status polling: {e}")
+
+    # ===== PHASE 3B: MIXED COLOR/BW PRINTER SPLITTING =====
+    # These methods implement page-range dispatching for mixed jobs.
+    # The SAME original PDF is sent to two printers with different page ranges.
+    # No PDF splitting, no temp files, no duplication.
+
+    @staticmethod
+    def _build_page_ranges(page_list):
+        """Convert a sorted list of 1-indexed page numbers into a compact range string.
+
+        Example: [1,2,3,5,6,9] -> "1-3,5-6,9"
+
+        Used by mixed printer dispatch to build page-range arguments for
+        SumatraPDF and GDI printing.  Pure function — no I/O, no side effects.
+
+        Args:
+            page_list: Iterable of 1-indexed page numbers (unsorted OK).
+
+        Returns:
+            str: Compact page range string, or '' if input is empty/None.
+        """
+        if not page_list:
+            return ''
+        pages = sorted(set(int(p) for p in page_list if p > 0))
+        if not pages:
+            return ''
+
+        ranges = []
+        start = pages[0]
+        end = pages[0]
+        for p in pages[1:]:
+            if p == end + 1:
+                end = p
+            else:
+                ranges.append(f"{start}-{end}" if start != end else str(start))
+                start = end = p
+        ranges.append(f"{start}-{end}" if start != end else str(start))
+        return ','.join(ranges)
+
+    def _select_printer_by_capability(self, need_color, print_side='Single'):
+        """Select the best available printer matching a specific color capability.
+
+        Uses the existing authorized-printer and capability infrastructure.
+        This is a *targeted* variant of select_printer_for_job() that filters
+        strictly by color capability without creating a full job wrapper.
+
+        Args:
+            need_color (bool): True = select a color-capable printer,
+                               False = select a B&W (non-color) printer.
+            print_side (str):  'Single' or 'Double' — passed through for
+                               duplex filtering.
+
+        Returns:
+            str or None: Printer name, or None if no suitable printer found.
+        """
+        try:
+            authorized = self.get_authorized_printers()
+            candidates = [p.get('name') for p in authorized if p.get('name')]
+            if not candidates:
+                return None
+
+            # Filter by color capability
+            filtered = []
+            for name in candidates:
+                caps = self.get_printer_capabilities(name)
+                if not caps:
+                    continue
+                is_color = caps.get('is_color', False)
+                if need_color and is_color:
+                    filtered.append((name, caps))
+                elif not need_color and not is_color:
+                    filtered.append((name, caps))
+
+            if not filtered:
+                return None
+
+            # Duplex filtering (if required)
+            is_double = print_side.lower() in ['double', 'duplex']
+            if is_double:
+                duplex = [(n, c) for n, c in filtered if c.get('is_duplex', False)]
+                if duplex:
+                    return duplex[0][0]
+                # No duplex among filtered; return first available anyway
+                # (the printer driver may handle simplex fallback)
+
+            return filtered[0][0]
+        except Exception as e:
+            logger.warning(f"MIXED PRINT: _select_printer_by_capability(color={need_color}) error: {e}")
+            return None
+
+    def _dispatch_mixed_print(self, nup_path, file_type, settings, color_pages_list,
+                              total_pages, job_id=None):
+        """Execute sequential split dispatch for mixed color/BW jobs.
+
+        Sends the SAME PDF to two printers with different page ranges:
+          1. Color pages → color printer (dispatched FIRST)
+          2. B&W pages → B&W printer (dispatched SECOND)
+
+        CRITICAL DESIGN RULES:
+          - NO PDF splitting — uses page-range arguments only
+          - Sequential dispatch (color first, then BW) — no parallelism
+          - Graceful fallback to single-printer if split is impossible
+          - Preserves all existing SumatraPDF / GDI dispatch logic
+
+        Args:
+            nup_path (str):       Path to the print-ready PDF (may be layout-processed).
+            file_type (str):      File type identifier.
+            settings (dict):      Full print settings dict.
+            color_pages_list (list): 1-indexed page numbers designated as color.
+            total_pages (int):    Total pages in the document.
+            job_id (str):         Optional job ID for tracking.
+
+        Returns:
+            tuple: (success: bool, message: str)
+        """
+        import json as _json
+
+        copies = int(settings.get('copies') or 1)
+        orientation = settings.get('orientation') or 'Portrait'
+        print_side = settings.get('print_side') or 'Single'
+        page_size = settings.get('page_size') or 'A4'
+        effective_page_range = settings.get('_effective_page_range')  # May be None
+
+        # ── 1. Determine the universe of pages being printed ──
+        # If generate_final_print_pdf() already applied the page range,
+        # effective_page_range is None and all pages in nup_path are printed.
+        # Otherwise, the user's page_range is still active.
+        if effective_page_range:
+            from shared.file_processor import parse_page_range
+            try:
+                universe = set(parse_page_range(effective_page_range, total_pages))
+            except Exception:
+                universe = set(range(1, total_pages + 1))
+        else:
+            universe = set(range(1, total_pages + 1))
+
+        color_set = set(int(p) for p in color_pages_list if int(p) in universe)
+        bw_set = universe - color_set
+
+        # Safety: if one set is empty, this is not a mixed job
+        if not color_set or not bw_set:
+            logger.info(f"MIXED PRINT: Not actually mixed after range intersection. "
+                        f"color={len(color_set)}, bw={len(bw_set)}. Using single dispatch.")
+            return None  # Signal caller to use default single-dispatch
+
+        # ── 2. Build compact page-range strings ──
+        color_range_str = self._build_page_ranges(color_set)
+        bw_range_str = self._build_page_ranges(bw_set)
+
+        logger.info(f"MIXED PRINT: Detected mixed job — "
+                    f"color_pages={sorted(color_set)} range='{color_range_str}', "
+                    f"bw_pages={sorted(bw_set)} range='{bw_range_str}'")
+
+        # ── 3. Select printers ──
+        color_printer = self._select_printer_by_capability(need_color=True, print_side=print_side)
+        bw_printer = self._select_printer_by_capability(need_color=False, print_side=print_side)
+
+        # Phase 3F HARD BLOCK: If a required printer is missing, return FAILURE
+        # — NOT None.  None means "not mixed, safe to single-dispatch."
+        # (False, msg) means "mixed job with missing hardware — MUST NOT print."
+        if not color_printer and not bw_printer:
+            msg = "Mixed print blocked: no color or B&W printer connected."
+            logger.warning(f"MIXED PRINT: {msg}")
+            return False, msg
+        if not color_printer:
+            msg = "Mixed print blocked: color printer is not connected."
+            logger.warning(f"MIXED PRINT: {msg}")
+            return False, msg
+        if not bw_printer:
+            msg = "Mixed print blocked: Black & White printer is not connected."
+            logger.warning(f"MIXED PRINT: {msg}")
+            return False, msg
+
+        # If both resolve to the same printer, no split needed
+        if color_printer == bw_printer:
+            logger.info(f"MIXED PRINT: Both types routed to same printer '{color_printer}'. "
+                        f"Using single-printer dispatch.")
+            return None
+
+        logger.info(f"MIXED PRINT: Dispatch plan — "
+                    f"COLOR printer='{color_printer}' range='{color_range_str}' | "
+                    f"BW printer='{bw_printer}' range='{bw_range_str}'")
+
+        # ── 4. Sequential Dispatch: COLOR first, then BW ──
+        # Phase 3C Lite: Store routing metadata for dashboard popup visibility
+        if job_id:
+            self.mixed_dispatch_info[job_id] = {
+                'color_printer': color_printer,
+                'bw_printer': bw_printer,
+                'color_range': color_range_str,
+                'bw_range': bw_range_str,
+            }
+            logger.info(f"MIXED UI: Stored dispatch info for job {job_id}")
+
+        sumatra = self._find_sumatra_pdf()
+        overall_success = True
+        messages = []
+
+        for dispatch_label, printer_name, range_str, color_mode_override in [
+            ('COLOR', color_printer, color_range_str, 'Color'),
+            ('BW',    bw_printer,    bw_range_str,    'Black & White'),
+        ]:
+            logger.info(f"MIXED PRINT: Dispatching {dispatch_label} — "
+                        f"printer='{printer_name}', range='{range_str}', copies={copies}")
+
+            dispatch_ok = False
+            dispatch_msg = ''
+
+            # Track active job for this dispatch
+            if job_id:
+                self.active_jobs[job_id] = {
+                    'printer': printer_name,
+                    'type': 'sumatra' if (sumatra and nup_path.lower().endswith('.pdf')) else 'gdi',
+                    'process': None
+                }
+                self.job_printers[job_id] = printer_name
+
+            # Try SumatraPDF for PDFs
+            if nup_path.lower().endswith('.pdf') and sumatra and os.path.exists(sumatra):
+                try:
+                    dispatch_ok, dispatch_msg = self._print_with_sumatra(
+                        sumatra, nup_path, copies, range_str,
+                        orientation, print_side, color_mode_override,
+                        printer_name=printer_name, job_id=job_id
+                    )
+                except Exception as e:
+                    logger.warning(f"MIXED PRINT: SumatraPDF failed for {dispatch_label}: {e}")
+                    dispatch_ok = False
+
+            # GDI fallback
+            if not dispatch_ok:
+                try:
+                    dispatch_ok, dispatch_msg = self._print_via_gdi_images(
+                        nup_path, file_type, copies, range_str,
+                        page_size, orientation, color_mode_override,
+                        job_id=job_id, printer_name=printer_name,
+                        print_side=print_side
+                    )
+                except Exception as e:
+                    dispatch_ok = False
+                    dispatch_msg = f"GDI failed for {dispatch_label}: {e}"
+                    logger.error(f"MIXED PRINT: {dispatch_msg}")
+
+            if dispatch_ok:
+                logger.info(f"MIXED PRINT: {dispatch_label} dispatch SUCCESS — {dispatch_msg}")
+                messages.append(f"{dispatch_label}: OK")
+            else:
+                logger.error(f"MIXED PRINT: {dispatch_label} dispatch FAILED — {dispatch_msg}")
+                messages.append(f"{dispatch_label}: FAILED ({dispatch_msg})")
+                overall_success = False
+                # Continue to next dispatch — don't abort BW if color fails
+
+        # Cleanup active job tracking
+        if job_id and job_id in self.active_jobs:
+            del self.active_jobs[job_id]
+        # Note: mixed_dispatch_info is NOT cleaned here — it persists for popup
+        # display until the popup closes or the job is garbage-collected.
+
+        summary = '; '.join(messages)
+        if overall_success:
+            logger.info(f"MIXED PRINT: All dispatches complete -- {summary}")
+            return True, f"Mixed print complete: {summary}"
+        else:
+            logger.error(f"MIXED PRINT: Partial failure -- {summary}")
+            return False, f"Mixed print partial failure: {summary}"
+
+    # ===== PHASE 3F: HARD-VALIDATED MIXED PRINTER SAFETY SYSTEM =====
+    # Single source of truth for mixed print job validation.
+    # Replaces get_mixed_routing_preview() with a richer result that
+    # distinguishes "not mixed" from "mixed but missing printer."
+    #
+    # Consumed by:
+    #   - JobPopupDialog.__init__()   (popup display + button state)
+    #   - auto_print_with_routing_check() (auto mode gate)
+    #   - _on_routing_complete()      (print-click gate)
+    #   - _dispatch_mixed_print()     (dispatch-layer hard block)
+    #
+    # Rollback: revert this method back to get_mixed_routing_preview() and
+    #           remove all call-site references to 'mixed_validation'.
+
+    def validate_mixed_printer_requirements(self, job):
+        """Phase 3F: Authoritative mixed printer validation.
+
+        Determines whether a job is mixed, and if so, whether the required
+        printers are available.  Returns a structured result that lets
+        every consumer make the correct decision without duplicating logic.
+
+        Args:
+            job: PrintJob instance (or SimpleNamespace) with at least:
+                 color_pages, color_mode, total_pages, print_side.
+
+        Returns:
+            dict with keys:
+                'is_mixed'      (bool)  — True iff both color AND B&W pages exist.
+                'valid'         (bool)  — True iff mixed routing CAN proceed
+                                          (both printers found and distinct).
+                'missing'       (str|None) — 'color', 'bw', 'both', or None.
+                'message'       (str|None) — Human-readable error for popup.
+                'color_printer' (str|None)
+                'bw_printer'    (str|None)
+                'color_range'   (str)   — Compact page range for color pages.
+                'bw_range'      (str)   — Compact page range for B&W pages.
+        """
+        _NOT_MIXED = {
+            'is_mixed': False, 'valid': False, 'missing': None,
+            'message': None, 'color_printer': None, 'bw_printer': None,
+            'color_range': '', 'bw_range': '',
+        }
+        try:
+            # Gate 1: Must have color_pages metadata
+            color_pages_raw = getattr(job, 'color_pages', None)
+            if not color_pages_raw:
+                return _NOT_MIXED
+
+            # Gate 2: Must not be B&W mode
+            color_mode = getattr(job, 'color_mode', '') or ''
+            if color_mode.lower() == 'black & white':
+                return _NOT_MIXED
+
+            # Gate 3: Parse color pages
+            import json as _json
+            if isinstance(color_pages_raw, str):
+                color_pages_list = _json.loads(color_pages_raw)
+            elif isinstance(color_pages_raw, (list, set)):
+                color_pages_list = list(color_pages_raw)
+            else:
+                return _NOT_MIXED
+
+            if not color_pages_list or not isinstance(color_pages_list, list):
+                return _NOT_MIXED
+
+            color_pages_int = [int(p) for p in color_pages_list
+                               if isinstance(p, (int, float)) and p > 0]
+            if not color_pages_int:
+                return _NOT_MIXED
+
+            # Gate 4: Determine total pages
+            total_pages = getattr(job, 'total_pages', None)
+            if not total_pages or total_pages < 1:
+                return _NOT_MIXED
+
+            # Gate 5: Check for actual mix (both color and BW pages)
+            universe = set(range(1, total_pages + 1))
+            color_set = set(p for p in color_pages_int if p in universe)
+            bw_set = universe - color_set
+            if not color_set or not bw_set:
+                return _NOT_MIXED
+
+            # ── Job IS mixed from here on ──
+            color_range = self._build_page_ranges(color_set)
+            bw_range = self._build_page_ranges(bw_set)
+
+            # Gate 6: Find separate printers
+            print_side = getattr(job, 'print_side', 'Single') or 'Single'
+            color_printer = self._select_printer_by_capability(
+                need_color=True, print_side=print_side)
+            bw_printer = self._select_printer_by_capability(
+                need_color=False, print_side=print_side)
+
+            # ── Determine what is missing ──
+            if not color_printer and not bw_printer:
+                missing = 'both'
+                message = "Printer is not connected. Please connect printer."
+            elif not color_printer:
+                missing = 'color'
+                message = "Color printer is not connected. Please connect color printer."
+            elif not bw_printer:
+                missing = 'bw'
+                message = "Black & White printer is not connected. Please connect Black & White printer."
+            elif color_printer == bw_printer:
+                # Both capabilities resolve to same physical printer — cannot split.
+                # Treat as not-mixed so existing single-dispatch works correctly.
+                logger.info(f"MIXED VALIDATE: Both capabilities → same printer "
+                            f"'{color_printer}'. Treating as non-mixed.")
+                return _NOT_MIXED
+            else:
+                missing = None
+                message = None
+
+            valid = missing is None
+
+            if valid:
+                logger.info(f"MIXED VALIDATE: VALID — "
+                            f"color='{color_printer}' [{color_range}], "
+                            f"bw='{bw_printer}' [{bw_range}]")
+            else:
+                logger.warning(f"MIXED VALIDATE: BLOCKED — missing={missing}, "
+                               f"color_printer={color_printer}, bw_printer={bw_printer}")
+
+            return {
+                'is_mixed': True,
+                'valid': valid,
+                'missing': missing,
+                'message': message,
+                'color_printer': color_printer,
+                'bw_printer': bw_printer,
+                'color_range': color_range,
+                'bw_range': bw_range,
+            }
+        except Exception as e:
+            logger.debug(f"MIXED VALIDATE: Computation failed (non-fatal): {e}")
+            return _NOT_MIXED
+
+    def get_mixed_routing_preview(self, job):
+        """Phase 3C Lite backward-compat wrapper.
+
+        Delegates to validate_mixed_printer_requirements() and returns the
+        legacy dict format (or None) so any un-migrated callers keep working.
+        """
+        result = self.validate_mixed_printer_requirements(job)
+        if result.get('valid'):
+            return {
+                'color_printer': result['color_printer'],
+                'bw_printer': result['bw_printer'],
+                'color_range': result['color_range'],
+                'bw_range': result['bw_range'],
+            }
+        return None
 
     def _find_sumatra_pdf(self):
         """Locate SumatraPDF.exe if installed or bundled."""

@@ -994,10 +994,205 @@ def create_generic_grid_preview(single_page_img, rows, cols, gap=20, bg_color='w
             layout_img.paste(resized, (x, y))
     return layout_img
 
-def generate_final_print_pdf(file_path, file_type, page_size="A4", orientation="Portrait", layout_pages=1, color_mode="Color", page_range=""):
+# ── Phase 3A: Direct PIL preview for images (no PDF intermediary) ────────
+# This function bypasses the ENTIRE PDF pipeline for image previews:
+#   ✗ No ReportLab canvas
+#   ✗ No intermediate PDF file
+#   ✗ No fitz.open() / get_pixmap()
+#   ✗ No PDF rasterization
+#
+# Instead:  Image → PIL → EXIF → orientation → color → canvas → JPEG
+#
+# ONLY used when:  file_type ∈ {jpg, jpeg, png, webp, bmp, tiff} AND preview_mode=True
+# NEVER used for:  print path, PDFs, DOCX, multi-page documents
+#
+# Rollback: Delete this function + the call site in app.py render endpoint.
+#           generate_final_print_pdf() continues to work unchanged.
+
+_IMAGE_PREVIEW_TYPES = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff'}
+
+def generate_image_preview_direct(
+    file_path,
+    file_type,
+    output_dir,
+    page_size="A4",
+    orientation="Portrait",
+    layout_pages=1,
+    color_mode="Color",
+    max_preview_width=800,
+    jpeg_quality=60
+):
+    """
+    Generate preview JPEG(s) directly from an image file using only PIL.
+    Completely bypasses ReportLab + fitz for maximum speed.
+
+    Args:
+        file_path: Path to the source image file
+        file_type: File extension (must be in _IMAGE_PREVIEW_TYPES)
+        output_dir: Directory to write preview JPEG files into
+        page_size: Target page size for layout composition (e.g. "A4")
+        orientation: "Portrait" or "Landscape"
+        layout_pages: Pages per sheet (1, 2, 4, 6, 8, 9, 16)
+        color_mode: "Color" or "Black & White"
+        max_preview_width: Maximum width of output preview JPEG
+        jpeg_quality: JPEG compression quality (0-100)
+
+    Returns:
+        list[str]: List of absolute paths to generated preview JPEG files
+
+    Raises:
+        ValueError: If file_type is not an image type
+        FileNotFoundError: If file_path does not exist
+    """
+    import math
+    from PIL import ImageOps
+
+    if file_type not in _IMAGE_PREVIEW_TYPES:
+        raise ValueError(f"generate_image_preview_direct only handles images, got: {file_type}")
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Source image not found: {file_path}")
+
+    t_start = time.time()
+
+    # ── 1. Load image + EXIF correction ──────────────────────────────
+    img = Image.open(file_path)
+    img = ImageOps.exif_transpose(img)
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+
+    # Thumbnail to preview-adequate size (saves memory in composition)
+    img.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+
+    # ── 2. Apply color mode ──────────────────────────────────────────
+    img = apply_color_mode(img, color_mode)
+
+    # ── 3. Apply orientation ─────────────────────────────────────────
+    img_is_portrait = img.height > img.width
+    if orientation == "Landscape" and img_is_portrait:
+        img = img.rotate(90, expand=True)
+    elif orientation == "Portrait" and not img_is_portrait:
+        img = img.rotate(90, expand=True)
+
+    # ── 4. Get target page dimensions (in pixels for preview) ────────
+    # Use 72 DPI equivalent — page_size returns points (1 point = 1 px at 72 DPI)
+    page_w_pt, page_h_pt = get_page_size_dimensions(page_size)
+
+    # For 2-per-sheet, output is landscape
+    if layout_pages == 2:
+        if page_w_pt < page_h_pt:
+            page_w_pt, page_h_pt = page_h_pt, page_w_pt
+
+    # Scale to preview size (target ~800px max dimension)
+    scale = max_preview_width / max(page_w_pt, page_h_pt)
+    canvas_w = int(page_w_pt * scale)
+    canvas_h = int(page_h_pt * scale)
+
+    # ── 5. Layout composition ────────────────────────────────────────
+    rows, cols = get_grid_for_layout(layout_pages)
+    margin = int(18 * scale)  # Match ReportLab margin (18 points)
+
+    grid_w = canvas_w - 2 * margin
+    grid_h = canvas_h - 2 * margin
+
+    if layout_pages > 1:
+        cell_w = grid_w // cols
+        cell_h = grid_h // rows
+    else:
+        cell_w = grid_w
+        cell_h = grid_h
+
+    # Images always have 1 logical page — for N-up layout, place the
+    # image in slot 0 only; remaining slots stay blank (white).
+    # This matches generate_final_print_pdf's None-padding semantics.
+    num_sheets = 1  # Single image = always 1 sheet
+
+    # Create canvas (white background)
+    canvas_img = Image.new('RGB', (canvas_w, canvas_h), (255, 255, 255))
+
+    if layout_pages == 1:
+        # ── Single page per sheet ────────────────────────────────────
+        img_w, img_h = img.size
+        img_aspect = img_w / img_h
+
+        if cell_w / cell_h > img_aspect:
+            draw_h = cell_h
+            draw_w = int(cell_h * img_aspect)
+        else:
+            draw_w = cell_w
+            draw_h = int(cell_w / img_aspect)
+
+        resized = img.resize((draw_w, draw_h), Image.Resampling.LANCZOS)
+
+        # Center on canvas
+        x = margin + (cell_w - draw_w) // 2
+        y = margin + (cell_h - draw_h) // 2
+
+        canvas_img.paste(resized, (x, y))
+    else:
+        # ── Multi-page layout (page-aware, Xerox N-up semantics) ─────
+        # 1 image = 1 logical document page.  Build a slot list padded
+        # with None so unfilled slots remain blank (white background).
+        # This mirrors generate_final_print_pdf's sheet_page_nums logic.
+        slot_pages = [img] + [None] * (layout_pages - 1)
+
+        img_w, img_h = img.size
+        img_aspect = img_w / img_h
+
+        if cell_w / cell_h > img_aspect:
+            draw_h = cell_h
+            draw_w = int(cell_h * img_aspect)
+        else:
+            draw_w = cell_w
+            draw_h = int(cell_w / img_aspect)
+
+        resized = img.resize((draw_w, draw_h), Image.Resampling.LANCZOS)
+
+        for idx, page in enumerate(slot_pages):
+            if page is None:
+                continue  # Blank slot — white background shows through
+
+            r = idx // cols
+            col_idx = idx % cols
+
+            x = margin + col_idx * cell_w + (cell_w - draw_w) // 2
+            y = margin + r * cell_h + (cell_h - draw_h) // 2
+
+            canvas_img.paste(resized, (x, y))
+
+    # ── 6. Downscale if needed ───────────────────────────────────────
+    if canvas_img.width > max_preview_width:
+        ratio = max_preview_width / canvas_img.width
+        canvas_img = canvas_img.resize(
+            (max_preview_width, int(canvas_img.height * ratio)),
+            Image.Resampling.LANCZOS
+        )
+
+    # ── 7. Save preview JPEG directly (NO intermediate PDF) ──────────
+    os.makedirs(output_dir, exist_ok=True)
+    preview_filename = f"preview_{uuid.uuid4().hex[:8]}_sheet_1.jpg"
+    preview_path = os.path.join(output_dir, preview_filename)
+
+    canvas_img.save(preview_path, "JPEG", quality=jpeg_quality, optimize=True)
+
+    t_elapsed = time.time() - t_start
+    logger.info(f"IMAGE PREVIEW DIRECT: {file_type} rendered in {t_elapsed:.3f}s "
+                f"(layout={layout_pages}, orient={orientation}, color={color_mode}, "
+                f"size={canvas_img.width}x{canvas_img.height})")
+
+    return [preview_path]
+
+
+def generate_final_print_pdf(file_path, file_type, page_size="A4", orientation="Portrait", layout_pages=1, color_mode="Color", page_range="", preview_mode=False, color_pages=None):
     """
     Generate final print-ready PDF that matches preview output EXACTLY.
     Handles both local paths and Cloudinary URLs.
+    
+    Phase 3D: Per-page color rendering.
+    If color_pages is provided (list of 1-indexed page numbers designated as color),
+    pages IN the list are rendered in Color, pages NOT in the list are rendered
+    in Black & White. If color_pages is None, the global color_mode is applied
+    uniformly to all pages (preserving existing behavior).
     """
     # ROOT FIX: Ensure local path
     src_local_path, is_temp = ensure_local_path(file_path)
@@ -1005,50 +1200,85 @@ def generate_final_print_pdf(file_path, file_type, page_size="A4", orientation="
     try:
         import math
         
+        # Phase 1E-A: Architectural isolation -- detect image-only preview requests.
+        # This flag enables future phases to optimize the image preview path
+        # independently without touching the generic PDF/document pipeline.
+        _IMAGE_PREVIEW_TYPES = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff'}
+        _is_image_preview = preview_mode and file_type in _IMAGE_PREVIEW_TYPES
+
+        # Phase 3D: Parse color_pages into a fast-lookup set.
+        # If color_pages is provided and non-empty, per-page rendering activates.
+        # Otherwise, the global color_mode path is used (zero overhead).
+        _color_pages_set = None
+        if color_pages:
+            try:
+                import json as _json
+                if isinstance(color_pages, str):
+                    _parsed = _json.loads(color_pages)
+                elif isinstance(color_pages, (list, set, tuple)):
+                    _parsed = list(color_pages)
+                else:
+                    _parsed = None
+                if _parsed and isinstance(_parsed, list):
+                    _color_pages_set = set(int(p) for p in _parsed
+                                           if isinstance(p, (int, float)) and p > 0)
+                    if not _color_pages_set:
+                        _color_pages_set = None
+            except Exception:
+                _color_pages_set = None
+
+        _is_mixed_render = _color_pages_set is not None
+        if _is_mixed_render:
+            logger.info(f"PHASE 3D: Mixed rendering activated -- "
+                        f"{len(_color_pages_set)} color pages, "
+                        f"remaining pages will be B&W")
+
         # Step 0: Normalize non-PDF files for high-fidelity conversion
         pdf_path = src_local_path
-        if file_type != 'pdf':
-            pdf_path = normalize_document_for_preview(src_local_path, file_type)
-            if pdf_path == src_local_path:
-                # Conversion failed, handle as original
-                print(f"Warning: Could not normalize {file_type} to PDF for final print")
-            else:
-                # Conversion succeeded - update file_type for downstream processing
-                file_type = 'pdf'
-        
-        # If no layout and no page range, return the (possibly converted) file
-        #if layout_pages == 1 and not page_range.strip():
-            # NOTE: If it was a URL, we might want to return the original URL 
-            # if no processing was needed. But for safety, returning the local path 
-            # or normalized PDF is fine as downstream also handles them.
-            #return pdf_path
-        
-        # Step 1: Open PDF document
-        try:
-            import fitz
-            pdf_document = fitz.open(pdf_path)
-            total_pages = len(pdf_document)
-        except Exception as e:
-            print(f"Error opening PDF: {e}")
-            return file_path
-        
-        # Parse page range to get selected pages
-        if page_range and page_range.strip():
-            try:
-                selected_page_nums = parse_page_range(page_range.strip(), total_pages)
-            except Exception as e:
-                print(f"Error parsing page range '{page_range}': {e}, using all pages")
-                selected_page_nums = list(range(1, total_pages + 1))
+        pdf_document = None
+        if _is_image_preview:
+            # ── Phase 1E-C: Complete normalization bypass for image previews ──
+            # Images are rendered directly via PIL (Phase 1E-B) — no need for
+            # PDF conversion or fitz.  Skip normalize_document_for_preview()
+            # and fitz.open() entirely.  Images always have exactly 1 page.
+            # Print path and PDF/doc preview path never reach here.
+            logger.debug(f"IMAGE PREVIEW PATH: Bypassing normalization for {file_type}")
+            total_pages = 1
+            selected_page_nums = [1]
         else:
-            selected_page_nums = list(range(1, total_pages + 1))
-        
-        # CRITICAL SAFETY CHECK: Reject job if page range results in 0 pages
-        # This prevents empty PDF → empty raster → silent printer stop
-        if not selected_page_nums:
-            pdf_document.close()
-            error_msg = f"Page range '{page_range}' is invalid or exceeds document page count ({total_pages} pages)"
-            print(f"ERROR: {error_msg}")
-            raise ValueError(error_msg)
+            # ── Generic document/PDF + print path (unchanged) ──
+            if file_type != 'pdf':
+                pdf_path = normalize_document_for_preview(src_local_path, file_type)
+                if pdf_path == src_local_path:
+                    print(f"Warning: Could not normalize {file_type} to PDF for final print")
+                else:
+                    file_type = 'pdf'
+
+            # Step 1: Open PDF document
+            try:
+                import fitz
+                pdf_document = fitz.open(pdf_path)
+                total_pages = len(pdf_document)
+            except Exception as e:
+                print(f"Error opening PDF: {e}")
+                return file_path
+
+            # Parse page range to get selected pages
+            if page_range and page_range.strip():
+                try:
+                    selected_page_nums = parse_page_range(page_range.strip(), total_pages)
+                except Exception as e:
+                    print(f"Error parsing page range '{page_range}': {e}, using all pages")
+                    selected_page_nums = list(range(1, total_pages + 1))
+            else:
+                selected_page_nums = list(range(1, total_pages + 1))
+
+            # CRITICAL SAFETY CHECK: Reject job if page range results in 0 pages
+            if not selected_page_nums:
+                pdf_document.close()
+                error_msg = f"Page range '{page_range}' is invalid or exceeds document page count ({total_pages} pages)"
+                print(f"ERROR: {error_msg}")
+                raise ValueError(error_msg)
         
         # Get grid dimensions for layout
         rows, cols = get_grid_for_layout(layout_pages)
@@ -1105,34 +1335,75 @@ def generate_final_print_pdf(file_path, file_type, page_size="A4", orientation="
                     continue
                 
                 try:
-                    # Get page (1-based to 0-based index)
-                    page_idx = page_num - 1
-                    if 0 <= page_idx < len(pdf_document):
-                        page = pdf_document[page_idx]
-                        page_rect = page.rect
-                        
-                        zoom_factor = 2.0
-                        mat = fitz.Matrix(zoom_factor, zoom_factor)
-                        
-                        # Render page to image
-                        pix = page.get_pixmap(matrix=mat, alpha=False)
-                        img_data = pix.tobytes("png")
-                        img = Image.open(io.BytesIO(img_data))
-                        img = apply_color_mode(img, color_mode)
+                    if _is_image_preview:
+                        # ── Phase 1E-B: Direct PIL rendering for image previews ──
+                        # Bypasses fitz PDF rasterization entirely.
+                        # Loads the original image directly with PIL, applies EXIF
+                        # correction, color mode, and orientation — then feeds the
+                        # result into the SAME layout composition code below.
+                        # Print path never reaches here (_is_image_preview=False).
+                        from PIL import ImageOps
+                        img = Image.open(src_local_path)
+                        img = ImageOps.exif_transpose(img)
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
 
-                        img_w, img_h = img.size
-                        # Use original PDF page orientation (more reliable)
-                        page_is_portrait = page_rect.height > page_rect.width
+                        # Thumbnail to preview-adequate size (saves memory/CPU
+                        # in downstream layout composition).
+                        img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
 
-                        if orientation == "Landscape" and page_is_portrait:
+                        # Phase 3D: Per-page color mode for image previews
+                        _eff_cm = color_mode
+                        if _is_mixed_render and page_num is not None:
+                            _eff_cm = 'Color' if page_num in _color_pages_set else 'Black & White'
+                        img = apply_color_mode(img, _eff_cm)
+
+                        # Orientation: match existing logic using image dimensions
+                        img_is_portrait = img.height > img.width
+
+                        if orientation == "Landscape" and img_is_portrait:
                             img = img.rotate(90, expand=True)
-
-                        elif orientation == "Portrait" and not page_is_portrait:
-                            img = img.rotate(90, expand=True)           
+                        elif orientation == "Portrait" and not img_is_portrait:
+                            img = img.rotate(90, expand=True)
 
                         page_images.append(img)
                     else:
-                        page_images.append(None)  # Out of bounds, use placeholder
+                        # ── Generic fitz path (PDFs, documents, print) ── unchanged
+                        # Get page (1-based to 0-based index)
+                        page_idx = page_num - 1
+                        if 0 <= page_idx < len(pdf_document):
+                            page = pdf_document[page_idx]
+                            page_rect = page.rect
+                            
+                            # Phase 1D-B: Reduce rasterization cost for previews.
+                            # Print path (preview_mode=False): 2.0x — full fidelity, unchanged.
+                            # Preview path (preview_mode=True): 0.5x — sufficient for 800px output.
+                            zoom_factor = 0.5 if preview_mode else 2.0
+                            mat = fitz.Matrix(zoom_factor, zoom_factor)
+                            
+                            # Render page to image
+                            pix = page.get_pixmap(matrix=mat, alpha=False)
+                            img_data = pix.tobytes("png")
+                            img = Image.open(io.BytesIO(img_data))
+                            # Phase 3D: Per-page color mode for PDF/document rendering
+                            _eff_cm = color_mode
+                            if _is_mixed_render:
+                                _eff_cm = 'Color' if page_num in _color_pages_set else 'Black & White'
+                            img = apply_color_mode(img, _eff_cm)
+
+                            img_w, img_h = img.size
+                            # Use original PDF page orientation (more reliable)
+                            page_is_portrait = page_rect.height > page_rect.width
+
+                            if orientation == "Landscape" and page_is_portrait:
+                                img = img.rotate(90, expand=True)
+
+                            elif orientation == "Portrait" and not page_is_portrait:
+                                img = img.rotate(90, expand=True)           
+
+                            page_images.append(img)
+                        else:
+                            page_images.append(None)  # Out of bounds, use placeholder
                 except Exception as e:
                     print(f"Error processing page {page_num}: {e}")
                     page_images.append(None)  # Error, use placeholder
@@ -1211,7 +1482,8 @@ def generate_final_print_pdf(file_path, file_type, page_size="A4", orientation="
         
         # Save PDF
         c.save()
-        pdf_document.close()
+        if pdf_document:
+            pdf_document.close()
         
         # Cleanup converted PDF if temporary
         if pdf_path != src_local_path and Path(pdf_path).exists():
@@ -2209,6 +2481,36 @@ def classify_color_pages(file_path, file_type):
             try: os.remove(local_path)
             except: pass
 
+def build_color_page_dict(color_pages_list, total_pages):
+    """Build a color_page_dict from user-selected color page numbers.
+
+    Converts a list of 1-indexed page numbers (user-selected as "color") into
+    the {page_number: 'color'|'bw'} dict consumed by calculate_billing().
+
+    Args:
+        color_pages_list: list/set of 1-indexed page numbers to treat as color.
+                          None or empty → returns None (all-color fallback).
+        total_pages: total document page count.
+
+    Returns:
+        dict or None: {1: 'color', 2: 'bw', ...} or None if no selection.
+
+    Safety:
+        - Returns None on any error (backward-compatible: all-color billing).
+        - Ignores out-of-range page numbers silently.
+        - Pure function — no I/O, no side effects.
+    """
+    try:
+        if not color_pages_list or not total_pages or total_pages < 1:
+            return None
+        color_set = set(int(p) for p in color_pages_list if isinstance(p, (int, float)) and p > 0)
+        if not color_set:
+            return None
+        return {pg: ('color' if pg in color_set else 'bw') for pg in range(1, total_pages + 1)}
+    except Exception:
+        return None
+
+
 def calculate_billing(color_mode, print_side, copies, layout_pages, selected_pages, color_page_dict, pricing):
     """
     Shared billing calculation logic for both PRINT and XEROX flows.
@@ -2349,3 +2651,309 @@ def cleanup_old_uploads(max_age_hours: int = 72):
                     pass
     except Exception:
         pass
+
+import hashlib
+
+
+def _compute_proxy_lookup_key(original_filename, file_size):
+    """Compute a deterministic cache key for proxy file lookup.
+
+    Uses ONLY metadata (original filename + file size) — no file I/O,
+    no image processing, no content reading.  The same inputs always
+    produce the same key, enabling the preview resolver to find a proxy
+    that was generated during upload without any shared state or DB.
+
+    Args:
+        original_filename (str): Browser-provided original filename.
+        file_size (int): File size in bytes.
+
+    Returns:
+        str: 12-character hex digest, or None on error.
+    """
+    try:
+        raw = f"{original_filename}:{file_size}".encode('utf-8')
+        return hashlib.md5(raw).hexdigest()[:12]
+    except Exception:
+        return None
+
+
+def resolve_preview_source(original_path, file_type, original_filename=None):
+    """Pure cache lookup for a pre-generated proxy asset.
+
+    This function does NO image processing, NO proxy generation, NO file
+    reading.  It only:
+      1. Computes a deterministic cache key from metadata
+      2. Checks whether a matching proxy JPEG exists on disk
+      3. Returns the proxy path (cache hit) or original path (cache miss)
+
+    The proxy was already generated asynchronously by Phase 1B during upload.
+    This function merely CONSUMES that cached asset.
+
+    PREVIEW-ONLY:  Never called by the print pipeline.
+
+    Args:
+        original_path (str): Path to the temp file saved by the preview route.
+        file_type (str): File extension without dot.
+        original_filename (str, optional): Browser-provided original filename.
+            Used together with file size to compute the cache key.
+            Falls back to basename of original_path if not provided.
+
+    Returns:
+        tuple: (resolved_path: str, is_proxy: bool)
+    """
+    PROXY_IMAGE_TYPES = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff'}
+    ft = (file_type or '').lower().strip()
+
+    # Only look up proxies for image types (PDFs/docs need multi-page fidelity)
+    if ft not in PROXY_IMAGE_TYPES:
+        logger.debug(f"PREVIEW SOURCE: Using original (type={ft})")
+        return original_path, False
+
+    if not original_path or not os.path.exists(original_path):
+        logger.debug("PREVIEW SOURCE: Using original (path missing)")
+        return original_path, False
+
+    # Compute deterministic lookup key — metadata only, no file content read
+    try:
+        file_size = os.path.getsize(original_path)
+    except Exception:
+        return original_path, False
+
+    fname = original_filename or os.path.basename(original_path)
+    lookup_key = _compute_proxy_lookup_key(fname, file_size)
+    if not lookup_key:
+        return original_path, False
+
+    # Check if Phase 1B already generated a proxy with this key
+    proxy_path = UPLOAD_FOLDER / "proxies" / f"proxy_{lookup_key}.jpg"
+    if proxy_path.exists():
+        logger.debug(f"PREVIEW SOURCE: Cache HIT — key={lookup_key}")
+        return str(proxy_path), True
+
+    logger.debug(f"PREVIEW SOURCE: Cache MISS — key={lookup_key}, using original")
+    return original_path, False
+
+
+def generate_proxy_asset(file_path, file_type, proxy_id=None):
+    """
+    Generate a lightweight proxy JPEG from an uploaded file for fast UI previews.
+    
+    This is an ISOLATED utility function — it does NOT modify any existing
+    preview, upload, or print pipeline. It is designed to be called independently
+    and produces a small (~100-200KB) JPEG proxy suitable for rapid UI rendering.
+    
+    The ORIGINAL file is NEVER modified. The proxy is a separate, disposable asset.
+    
+    Supported inputs:
+        - Images (jpg/jpeg/png/webp/bmp/tiff): Thumbnail with EXIF correction
+        - PDF: First page rendered at 0.5x scale
+        - Documents (docx/doc/pptx/xlsx/odt/ods/odp): Converted to PDF first,
+          then first page rendered (reuses existing convert_to_pdf)
+    
+    Args:
+        file_path (str): Absolute path to the source file (local path, NOT a URL)
+        file_type (str): File extension without dot (e.g. 'jpg', 'pdf', 'docx')
+        proxy_id (str, optional): Unique identifier for the proxy file.
+                                  If None, a UUID hex prefix is generated.
+    
+    Returns:
+        dict: {
+            'success': bool,
+            'proxy_id': str,          # Unique proxy identifier
+            'proxy_path': str,        # Absolute path to generated proxy JPEG
+            'source_type': str,       # 'image', 'pdf', or 'document'
+            'original_path': str,     # Original file path (unchanged)
+            'proxy_size_bytes': int,  # Size of generated proxy file
+        }
+        On failure: { 'success': False, 'error': str, 'original_path': str }
+    
+    Memory budget:
+        - Image (20MB JPEG): ~38MB peak (PIL decode + thumbnail)
+        - PDF: ~5MB peak (fitz at 0.5x scale)
+        - Document: ~5MB peak (after convert_to_pdf)
+    
+    Safety:
+        - Never modifies the source file
+        - Never touches print pipeline functions
+        - Never touches existing preview functions
+        - Fully rollback-safe (delete the function to remove)
+    """
+    from PIL import ImageOps
+    
+    # Validate inputs
+    if not file_path or not os.path.exists(file_path):
+        return {
+            'success': False,
+            'error': f'Source file not found: {file_path}',
+            'original_path': file_path
+        }
+    
+    file_type = (file_type or '').lower().strip().lstrip('.')
+    if not file_type:
+        return {
+            'success': False,
+            'error': 'file_type is required',
+            'original_path': file_path
+        }
+    
+    # Generate proxy ID if not provided
+    if not proxy_id:
+        proxy_id = uuid.uuid4().hex[:12]
+    
+    # Create proxy output directory: uploads/proxies/
+    proxy_dir = UPLOAD_FOLDER / "proxies"
+    try:
+        proxy_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'Failed to create proxy directory: {e}',
+            'original_path': file_path
+        }
+    
+    proxy_filename = f"proxy_{proxy_id}.jpg"
+    proxy_path = proxy_dir / proxy_filename
+    
+    # Classify input type
+    IMAGE_TYPES = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff'}
+    PDF_TYPES = {'pdf'}
+    DOCUMENT_TYPES = {'docx', 'doc', 'pptx', 'ppt', 'xlsx', 'xls', 'odt', 'ods', 'odp'}
+    
+    try:
+        # ── BRANCH 1: Image files ──────────────────────────────────────
+        if file_type in IMAGE_TYPES:
+            img = Image.open(file_path)
+            
+            # CRITICAL: Fix mobile camera EXIF orientation before thumbnailing.
+            # Without this, portrait photos from phones appear rotated.
+            img = ImageOps.exif_transpose(img)
+            
+            # Convert to RGB if needed (handles RGBA, LA, P, CMYK modes)
+            if img.mode not in ('RGB',):
+                img = img.convert('RGB')
+            
+            # Thumbnail to max 1024px on longest side (preserves aspect ratio)
+            img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+            
+            # Save optimized JPEG proxy
+            img.save(str(proxy_path), 'JPEG', quality=70, optimize=True)
+            
+            proxy_size = os.path.getsize(str(proxy_path))
+            logger.info(
+                f"PROXY GEN [image]: {Path(file_path).name} → {proxy_filename} "
+                f"({proxy_size / 1024:.0f}KB, {img.size[0]}x{img.size[1]})"
+            )
+            
+            return {
+                'success': True,
+                'proxy_id': proxy_id,
+                'proxy_path': str(proxy_path),
+                'source_type': 'image',
+                'original_path': file_path,
+                'proxy_size_bytes': proxy_size
+            }
+        
+        # ── BRANCH 2: PDF files ────────────────────────────────────────
+        elif file_type in PDF_TYPES:
+            import fitz  # PyMuPDF
+            
+            doc = fitz.open(file_path)
+            if len(doc) == 0:
+                doc.close()
+                return {
+                    'success': False,
+                    'error': 'PDF has no pages',
+                    'original_path': file_path
+                }
+            
+            # Render FIRST page only at 0.5x scale (lightweight, low memory)
+            page = doc[0]
+            mat = fitz.Matrix(0.5, 0.5)
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            img_data = pix.tobytes("png")
+            total_pdf_pages = len(doc)
+            doc.close()
+            
+            # Load into PIL for consistent output processing
+            img = Image.open(io.BytesIO(img_data))
+            if img.mode not in ('RGB',):
+                img = img.convert('RGB')
+            
+            # Scale up to 1024px width if the 0.5x render is too small
+            # (A4 at 72 DPI × 0.5 = ~297px width — too small for preview)
+            if img.width < 1024:
+                ratio = 1024 / img.width
+                new_width = 1024
+                new_height = int(img.height * ratio)
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Save optimized JPEG proxy
+            img.save(str(proxy_path), 'JPEG', quality=70, optimize=True)
+            
+            proxy_size = os.path.getsize(str(proxy_path))
+            logger.info(
+                f"PROXY GEN [pdf]: {Path(file_path).name} → {proxy_filename} "
+                f"({proxy_size / 1024:.0f}KB, {img.size[0]}x{img.size[1]}, page 1 of {total_pdf_pages})"
+            )
+            
+            return {
+                'success': True,
+                'proxy_id': proxy_id,
+                'proxy_path': str(proxy_path),
+                'source_type': 'pdf',
+                'original_path': file_path,
+                'proxy_size_bytes': proxy_size
+            }
+        
+        # ── BRANCH 3: Document files (DOCX/DOC/PPTX etc.) ─────────────
+        elif file_type in DOCUMENT_TYPES:
+            # Reuse existing convert_to_pdf() to get a PDF, then use PDF branch
+            converted_pdf_path = convert_to_pdf(file_path, file_type)
+            
+            if converted_pdf_path == file_path:
+                # convert_to_pdf returns original path on failure
+                return {
+                    'success': False,
+                    'error': f'Failed to convert {file_type.upper()} to PDF for proxy generation',
+                    'original_path': file_path
+                }
+            
+            # Recursively call self with the converted PDF
+            result = generate_proxy_asset(converted_pdf_path, 'pdf', proxy_id=proxy_id)
+            
+            # Update source_type to reflect original document type
+            if result.get('success'):
+                result['source_type'] = 'document'
+                result['original_path'] = file_path  # Point back to original, not converted PDF
+            
+            # Clean up the temporary converted PDF
+            try:
+                if converted_pdf_path != file_path and os.path.exists(converted_pdf_path):
+                    os.remove(converted_pdf_path)
+            except Exception:
+                pass  # Non-fatal: temp file cleanup failure
+            
+            return result
+        
+        # ── UNSUPPORTED TYPE ───────────────────────────────────────────
+        else:
+            return {
+                'success': False,
+                'error': f'Unsupported file type for proxy generation: {file_type}',
+                'original_path': file_path
+            }
+    
+    except Exception as e:
+        logger.error(f"PROXY GEN ERROR: {file_type} file '{Path(file_path).name}': {e}")
+        # Clean up partial proxy file on error
+        try:
+            if proxy_path.exists():
+                os.remove(str(proxy_path))
+        except Exception:
+            pass
+        
+        return {
+            'success': False,
+            'error': f'Proxy generation failed: {str(e)}',
+            'original_path': file_path
+        }

@@ -144,6 +144,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const previewOrientation = document.getElementById('previewOrientation');
     const previewPrintSide = document.getElementById('previewPrintSide');
     const previewColorMode = document.getElementById('previewColorMode');
+    const previewColorPageRange = document.getElementById('previewColorPageRange');
+    const previewColorPageRangeRow = document.getElementById('previewColorPageRangeRow');
     const previewCopies = document.getElementById('previewCopies');
     const previewPageRange = document.getElementById('previewPageRange');
 
@@ -197,6 +199,374 @@ document.addEventListener('DOMContentLoaded', function () {
     let _uploadInFlight = false; // Double-submit guard
     let printPreviewAbortController = null; // AbortController for PRINT preview requests
 
+    // ── Preview Session State (Phase 2D — state only, no API calls yet) ──────
+    // These variables track the upload-once/preview-by-reference session.
+    // They are NOT used by any existing code path yet.
+    // Future Phase 2E will wire generatePreview() to use these.
+    //
+    // Lifecycle:
+    //   1. User selects file → session state RESET (file changed)
+    //   2. Phase 2E: createPreviewSession() → sets currentPreviewSessionId
+    //   3. Phase 2E: renderPreview() → uses currentPreviewSessionId
+    //   4. User selects different file → session state RESET
+    //   5. Upload success → session state RESET
+    //
+    // Rollback: Delete these 3 variables + _resetPreviewSessionState().
+    //           Zero impact on any existing flow.
+    let currentPreviewSessionId = null;      // Set after POST /api/preview/session
+    let previewSessionReady = false;          // True when session created + metadata cached
+    let previewSessionCreating = false;       // True during session creation request
+    let currentPreviewFile = null;            // Compressed preview copy (dual-file architecture)
+
+    // ── Background Original Upload State (Phase 4) ──────────────────────
+    // Tracks the background upload of the ORIGINAL full-resolution file.
+    // The original is uploaded silently while the user views previews.
+    // On Print click, if ready → instant submit. If not → wait or fallback.
+    //
+    // Rollback: Delete these 3 variables + startBackgroundOriginalUpload().
+    //           Revert _resetPreviewSessionState() additions.
+    //           Revert uploadForm submit handler to legacy-only.
+    let originalUploadStatus = 'idle';          // 'idle'|'uploading'|'ready'|'failed'
+    let originalUploadPromise = null;           // Promise for await in print handler
+    let originalUploadAbortController = null;   // AbortController for file-change abort
+
+    /**
+     * Reset preview session state.
+     * Called whenever the source file changes (new selection, merge, upload success).
+     * Also aborts any in-flight background original upload.
+     */
+    function _resetPreviewSessionState() {
+        console.log('ORIGINAL UPLOAD: _resetPreviewSessionState called', {
+            previousStatus: originalUploadStatus,
+            hadSessionId: !!currentPreviewSessionId,
+            hadPromise: !!originalUploadPromise,
+            hadAbortController: !!originalUploadAbortController,
+            caller: new Error().stack.split('\n')[2].trim()
+        });
+        currentPreviewSessionId = null;
+        previewSessionReady = false;
+        previewSessionCreating = false;
+        currentPreviewFile = null;
+
+        // Phase 4: Abort any in-flight original upload on file change
+        if (originalUploadAbortController) {
+            console.log('ORIGINAL UPLOAD: Aborting in-flight upload during reset');
+            originalUploadAbortController.abort();
+            originalUploadAbortController = null;
+        }
+        originalUploadStatus = 'idle';
+        originalUploadPromise = null;
+        console.log('ORIGINAL UPLOAD: State reset to idle');
+    }
+
+    // ── Preview Compression Helpers (dual-file architecture) ─────────────
+    // These functions are NOT called anywhere yet.
+    // Future step will wire createPreviewSession() to use _createPreviewImage().
+    // Rollback: Delete both functions. Zero impact on any existing flow.
+
+    /**
+     * Check if a file is eligible for browser-side preview compression.
+     *
+     * Returns true ONLY for raster image types that benefit from
+     * canvas-based resize + JPEG recompression.
+     * Returns false for PDFs, documents, and all non-image types.
+     *
+     * @param {File|Blob} file
+     * @returns {boolean}
+     */
+    function _isCompressibleImage(file) {
+        if (!file) return false;
+        const name = (file.name || '').toLowerCase();
+        const mime = (file.type || '').toLowerCase();
+        const COMPRESSIBLE_EXT = /\.(jpe?g|png|webp|bmp|tiff?)$/;
+        const COMPRESSIBLE_MIME = /^image\/(jpeg|png|webp|bmp|tiff)$/;
+        return COMPRESSIBLE_EXT.test(name) || COMPRESSIBLE_MIME.test(mime);
+    }
+
+    /**
+     * Create a compressed preview copy of a large image for fast uploads.
+     *
+     * - Resizes to max 1600px (either dimension), preserving aspect ratio
+     * - Exports as JPEG at quality 0.70
+     * - Typical result: 15MB → 300–400KB
+     *
+     * Safety guarantees:
+     * - NEVER throws — always resolves (with compressed or original file)
+     * - Object URLs revoked immediately after use
+     * - Canvas memory freed after export
+     * - Non-image files returned unchanged
+     * - Files ≤2MB returned unchanged (not worth compressing)
+     *
+     * NOT called anywhere yet — future step will wire this in.
+     *
+     * @param {File} file - The original full-quality file
+     * @returns {Promise<File>} Compressed preview File, or original on skip/failure
+     */
+    async function _createPreviewImage(file) {
+        // ── Guard: only compress eligible images ─────────────────────
+        if (!_isCompressibleImage(file)) {
+            return file;
+        }
+
+        // ── Guard: skip if already small enough ──────────────────────
+        const SIZE_THRESHOLD = 2 * 1024 * 1024; // 2MB
+        if (file.size <= SIZE_THRESHOLD) {
+            return file;
+        }
+
+        const MAX_DIMENSION = 1600;
+        const JPEG_QUALITY = 0.70;
+
+        return new Promise(function (resolve) {
+            var objectUrl = null;
+            try {
+                var img = new Image();
+                objectUrl = URL.createObjectURL(file);
+
+                img.onload = function () {
+                    // Free object URL immediately — image data is in memory now
+                    if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
+
+                    try {
+                        // Calculate target dimensions (preserve aspect ratio)
+                        var width = img.width;
+                        var height = img.height;
+
+                        if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+                            var ratio = Math.min(MAX_DIMENSION / width, MAX_DIMENSION / height);
+                            width = Math.round(width * ratio);
+                            height = Math.round(height * ratio);
+                        }
+
+                        // Draw to canvas
+                        var canvas = document.createElement('canvas');
+                        canvas.width = width;
+                        canvas.height = height;
+                        var ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+
+                        // Export as JPEG blob
+                        canvas.toBlob(function (blob) {
+                            // Free canvas memory immediately
+                            canvas.width = 0;
+                            canvas.height = 0;
+
+                            if (blob && blob.size > 0) {
+                                var previewName = (file.name || 'image').replace(/\.[^.]+$/, '_preview.jpg');
+                                var previewFile = new File([blob], previewName, { type: 'image/jpeg' });
+
+                                console.log('PREVIEW COMPRESS: ' +
+                                    (file.size / (1024 * 1024)).toFixed(1) + 'MB → ' +
+                                    (previewFile.size / 1024).toFixed(0) + 'KB ' +
+                                    '(' + width + '×' + height + ')');
+
+                                resolve(previewFile);
+                            } else {
+                                console.warn('PREVIEW COMPRESS: Canvas export failed, using original');
+                                resolve(file);
+                            }
+                        }, 'image/jpeg', JPEG_QUALITY);
+
+                    } catch (renderErr) {
+                        console.warn('PREVIEW COMPRESS: Render error, using original —', renderErr);
+                        resolve(file);
+                    }
+                };
+
+                img.onerror = function () {
+                    if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
+                    console.warn('PREVIEW COMPRESS: Image load failed, using original');
+                    resolve(file);
+                };
+
+                img.src = objectUrl;
+
+            } catch (err) {
+                if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
+                console.warn('PREVIEW COMPRESS: Unexpected error, using original —', err);
+                resolve(file);
+            }
+        });
+    }
+
+    /**
+     * Create a preview session by uploading the file ONCE to the backend.
+     * The backend saves the file, computes page_count + color_classification,
+     * and returns a preview_session_id for future render-by-reference calls.
+     *
+     * Phase 2D-2: Helper function ONLY — NOT called anywhere yet.
+     * Phase 2E: Will be called from generatePreview() on first invocation.
+     *
+     * Safety:
+     *   - Never throws (all errors caught and logged)
+     *   - Never interrupts existing preview flow
+     *   - Stale-file guard prevents applying response if user changed file
+     *   - Duplicate-call guard via previewSessionCreating flag
+     *
+     * Rollback: Delete this function. Zero impact on existing flow.
+     *
+     * @param {File|Blob} file - The file to upload for the session
+     */
+    async function createPreviewSession(file) {
+        // ── Guard: no file ──────────────────────────────────────────────
+        if (!file) {
+            console.warn('PREVIEW SESSION: No file provided, skipping');
+            return;
+        }
+
+        // ── Guard: already creating ─────────────────────────────────────
+        if (previewSessionCreating) {
+            console.log('PREVIEW SESSION: Creation already in progress, skipping');
+            return;
+        }
+
+        // ── Guard: session already exists for this file ─────────────────
+        if (previewSessionReady && currentPreviewSessionId) {
+            console.log('PREVIEW SESSION: Session already active, skipping');
+            return;
+        }
+
+        previewSessionCreating = true;
+
+        // Capture file reference for stale-response detection.
+        // If the user selects a different file while this request is in flight,
+        // currentFile will change and we must discard the response.
+        const fileAtRequestStart = currentFile;
+
+        try {
+            console.log('PREVIEW SESSION: Creating session...');
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const response = await fetch('/api/preview/session', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+
+            // ── Stale-file guard ────────────────────────────────────────
+            // If the user changed the file while we were uploading,
+            // discard this response — it belongs to the old file.
+            if (currentFile !== fileAtRequestStart) {
+                console.log('PREVIEW SESSION: Ignoring stale response (file changed)');
+                return;
+            }
+
+            if (data.success && data.preview_session_id) {
+                currentPreviewSessionId = data.preview_session_id;
+                previewSessionReady = true;
+                console.log('PREVIEW SESSION: Created —',
+                    'id=' + data.preview_session_id.substring(0, 8),
+                    'pages=' + data.page_count,
+                    'color=' + data.color_pages,
+                    'bw=' + data.black_white_pages
+                );
+
+                // Phase 4: Start background original upload now that session exists
+                // Uses currentFile (original) — NOT the compressed preview
+                if (currentFile && currentFile !== file) {
+                    // file param is the preview; currentFile is the original
+                    startBackgroundOriginalUpload(currentFile, data.preview_session_id);
+                } else if (currentFile) {
+                    // Non-image file: currentFile === file (no compression happened)
+                    // Still upload original for instant print path
+                    startBackgroundOriginalUpload(currentFile, data.preview_session_id);
+                }
+            } else {
+                console.warn('PREVIEW SESSION: Creation failed —', data.error || 'Unknown error');
+                // Do NOT throw — existing preview flow will continue working via old /api/preview
+            }
+
+        } catch (err) {
+            // CRITICAL: Never throw, never interrupt existing flow.
+            // If session creation fails, the old /api/preview path remains active.
+            console.warn('PREVIEW SESSION: Creation error —', err.message || err);
+        } finally {
+            previewSessionCreating = false;
+        }
+    }
+
+    /**
+     * Render preview using an existing session (NO file re-upload).
+     * Sends a lightweight JSON payload (~200 bytes) to POST /api/preview/render.
+     *
+     * Phase 2E Step 1: Helper function ONLY — NOT called anywhere yet.
+     * Phase 2E Step 2: Will be called from generatePreview() when session is ready.
+     *
+     * Unlike the old /api/preview which re-uploads the entire file,
+     * this only sends the session ID + print settings as JSON.
+     * The backend reads the cached file from disk, reuses cached
+     * page_count and color_classification, and only re-runs
+     * layout composition + rasterisation.
+     *
+     * Rollback: Delete this function. Zero impact on existing flow.
+     *
+     * @returns {Object} The parsed JSON response from /api/preview/render
+     * @throws {Error} If session is not ready or server returns error
+     */
+    async function renderPreviewBySession() {
+        // ── Guard: session must be ready ────────────────────────────────
+        if (!previewSessionReady) {
+            throw new Error('Preview session not ready');
+        }
+        if (!currentPreviewSessionId) {
+            throw new Error('No preview session ID available');
+        }
+
+        // ── Build lightweight JSON payload (NO file) ────────────────────
+        // Read settings from the same DOM elements used by generatePreview()
+        const shopIdInput = document.querySelector('input[name="shop_id"]');
+        const pageRangeVal = (pageRangeInput && pageRangeInput.value || '').trim();
+
+        const payload = {
+            preview_session_id: currentPreviewSessionId,
+            page_size: pageSize.value,
+            orientation: orientation.value,
+            color_mode: colorMode.value,
+            layout_pages: parseInt(layoutPages.value, 10) || 1,
+            page_range: pageRangeVal || '',
+            print_side: printSide.value,
+            copies: parseInt(copies.value, 10) || 1,
+            shop_id: shopIdInput ? shopIdInput.value : null
+        };
+
+        // Phase 2: Include color_pages for mixed color/BW preview rendering.
+        // Only sent when Color Mode = Color AND user has specified color pages.
+        // If omitted, backend renders all pages in full color (unchanged behavior).
+        if (parsedColorPages && parsedColorPages.size > 0 && colorMode.value === 'Color') {
+            payload.color_pages = Array.from(parsedColorPages);
+        }
+
+        console.log('PREVIEW RENDER: Sending render-by-session request',
+            'session=' + currentPreviewSessionId.substring(0, 8),
+            'orientation=' + payload.orientation,
+            'layout=' + payload.layout_pages
+        );
+
+        // ── POST JSON (no FormData, no file — ~200 bytes) ───────────────
+        const response = await fetch('/api/preview/render', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        // ── Validate response ───────────────────────────────────────────
+        if (!data.success) {
+            throw new Error(data.error || 'Preview render failed');
+        }
+
+        console.log('PREVIEW RENDER: Success —',
+            'sheets=' + data.total_pages,
+            'pages=' + data.total_document_pages
+        );
+
+        return data;
+    }
+
     // Multi-page preview state (BUG FIX: Added to support proper page navigation)
     let previewUrls = [];  // Array of all preview URLs
     let currentPageIndex = 0;  // Current page index (0-based)
@@ -215,6 +585,78 @@ document.addEventListener('DOMContentLoaded', function () {
     let backendBWSheets = null;
     let isTrackingViewActive = false; // Race-condition guard: blocks preview UI after Print is clicked
 
+    // ── Color Page Range State (Phase 1) ─────────────────────────────────
+    // Tracks which pages the user wants printed in color (rest = B&W).
+    // These are frontend-only. No backend calls, no preview rerenders.
+    //
+    // Future phases will read parsedColorPages for:
+    //   - Preview rendering (grayscale vs color per page)
+    //   - Billing (mixed color/BW pricing)
+    //   - Printer splitting (color pages → color printer, rest → BW)
+    //
+    // Rollback: Delete these 4 variables + setupColorPageRange().
+    //           Zero impact on any existing flow.
+    let colorPageSelection = '';          // Raw string from PRINT color page range input
+    let parsedColorPages = new Set();     // Normalized Set of 1-indexed page numbers (PRINT)
+    let xeroxColorPageSelection = '';     // Raw string from XEROX color page range input
+    let xeroxParsedColorPages = new Set(); // Normalized Set of 1-indexed page numbers (XEROX)
+
+    // ── Phase 3E: Color Page Range Display Helper ────────────────────────
+    // Converts a Set/Array of 1-indexed page numbers into a compact range
+    // string for display purposes. e.g. [1,2,3,5,6,9] → "1-3,5-6,9"
+    // This is display-only — no billing, routing, or rendering changes.
+    //
+    // Rollback: Delete this function + references in preview update paths.
+    //           Zero impact on any existing flow.
+
+    /**
+     * Format an array/Set of page numbers into compact range notation.
+     *
+     * @param {Array|Set} pages - Collection of 1-indexed page numbers
+     * @returns {string} Compact range string, e.g. "1-3,5-6,9"
+     */
+    function formatCompactPageRanges(pages) {
+        if (!pages || (pages instanceof Set && pages.size === 0) ||
+            (Array.isArray(pages) && pages.length === 0)) {
+            return '';
+        }
+        var sorted = Array.from(pages).sort(function(a, b) { return a - b; });
+        var ranges = [];
+        var start = sorted[0], end = sorted[0];
+        for (var i = 1; i < sorted.length; i++) {
+            if (sorted[i] === end + 1) {
+                end = sorted[i];
+            } else {
+                ranges.push(start === end ? String(start) : start + '-' + end);
+                start = end = sorted[i];
+            }
+        }
+        ranges.push(start === end ? String(start) : start + '-' + end);
+        return ranges.join(',');
+    }
+
+    /**
+     * Determine the Color Page Range display value based on current state.
+     *
+     * Display rules (from spec):
+     *   CASE 1 — Mixed: color_pages exist + color mode = Color → "1-3,5-6,9"
+     *   CASE 2 — Full Color: color mode = Color + no color_pages → "All Pages"
+     *   CASE 3 — Full B&W: color mode = B&W → "None"
+     *
+     * @param {string} colorModeValue - Current color mode ("Color" or "Black & White")
+     * @param {Set} colorPagesSet - Parsed color pages set (may be empty)
+     * @returns {string} Display text for Color Page Range field
+     */
+    function getColorPageRangeDisplay(colorModeValue, colorPagesSet) {
+        if (colorModeValue === 'Black & White') {
+            return 'None';
+        }
+        if (colorPagesSet && colorPagesSet.size > 0) {
+            return formatCompactPageRanges(colorPagesSet);
+        }
+        return 'All Pages';
+    }
+
     // Setup all controls
     setupPreviewControls();
     setupCustomizationListeners();
@@ -222,6 +664,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Initialize orientation suffix icons
     setupOrientationIcons();
+
+    // Initialize Color Page Range conditional UI (Phase 1)
+    setupColorPageRange();
 
     // Drag & Drop handlers
     if (dropzone) {
@@ -279,6 +724,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 const pdfFile = new File([pdfBlob], `combined_${Date.now()}.pdf`, { type: 'application/pdf' });
 
                 currentFile = pdfFile;
+                console.log('ORIGINAL UPLOAD: Reset due to multi-image combine');
+                _resetPreviewSessionState(); // File changed — invalidate session
+                currentPreviewFile = await _createPreviewImage(currentFile);
+                if (currentPreviewFile === currentFile) console.log('PREVIEW COMPRESS: skipped (non-image/PDF)');
+                await createPreviewSession(currentPreviewFile || currentFile);
 
                 // Update UI
                 if (fileInfo) {
@@ -295,8 +745,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 previewBtn.disabled = false;
                 uploadBtn.disabled = false;
 
-                // Auto-preview
-                setTimeout(() => generatePreview(true), 500);
+                // Auto-preview (session ready — direct render path)
+                console.log('PREVIEW BOOTSTRAP: session ready → starting first render');
+                generatePreview(true);
 
             } catch (error) {
                 console.error('PDF combination failed:', error);
@@ -318,6 +769,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 const mergedPdfFile = new File([mergedPdfBlob], `merged_${Date.now()}.pdf`, { type: 'application/pdf' });
 
                 currentFile = mergedPdfFile;
+                console.log('ORIGINAL UPLOAD: Reset due to multi-PDF merge');
+                _resetPreviewSessionState(); // File changed — invalidate session
+                currentPreviewFile = await _createPreviewImage(currentFile);
+                if (currentPreviewFile === currentFile) console.log('PREVIEW COMPRESS: skipped (non-image/PDF)');
+                await createPreviewSession(currentPreviewFile || currentFile);
 
                 // Update UI
                 if (fileInfo) {
@@ -334,8 +790,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 previewBtn.disabled = false;
                 uploadBtn.disabled = false;
 
-                // Auto-preview
-                setTimeout(() => generatePreview(true), 500);
+                // Auto-preview (session ready — direct render path)
+                console.log('PREVIEW BOOTSTRAP: session ready → starting first render');
+                generatePreview(true);
 
             } catch (error) {
                 console.error('PDF merge failed:', error);
@@ -357,6 +814,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 const mergedPdfFile = new File([mergedPdfBlob], `merged_docx_${Date.now()}.pdf`, { type: 'application/pdf' });
 
                 currentFile = mergedPdfFile;
+                console.log('ORIGINAL UPLOAD: Reset due to multi-DOCX merge');
+                _resetPreviewSessionState(); // File changed — invalidate session
+                currentPreviewFile = await _createPreviewImage(currentFile);
+                if (currentPreviewFile === currentFile) console.log('PREVIEW COMPRESS: skipped (non-image/PDF)');
+                await createPreviewSession(currentPreviewFile || currentFile);
 
                 // Update UI (same pattern as multi-PDF)
                 if (fileInfo) {
@@ -373,8 +835,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 previewBtn.disabled = false;
                 uploadBtn.disabled = false;
 
-                // Auto-preview
-                setTimeout(() => generatePreview(true), 500);
+                // Auto-preview (session ready — direct render path)
+                console.log('PREVIEW BOOTSTRAP: session ready → starting first render');
+                generatePreview(true);
 
             } catch (error) {
                 console.error('DOCX conversion/merge failed:', error);
@@ -400,6 +863,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 const mergedPdfFile = new File([mergedPdfBlob], `mixed_${Date.now()}.pdf`, { type: 'application/pdf' });
 
                 currentFile = mergedPdfFile;
+                console.log('ORIGINAL UPLOAD: Reset due to mixed-file conversion');
+                _resetPreviewSessionState(); // File changed — invalidate session
+                currentPreviewFile = await _createPreviewImage(currentFile);
+                if (currentPreviewFile === currentFile) console.log('PREVIEW COMPRESS: skipped (non-image/PDF)');
+                await createPreviewSession(currentPreviewFile || currentFile);
 
                 // Update UI (same pattern as multi-PDF)
                 if (fileInfo) {
@@ -416,8 +884,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 previewBtn.disabled = false;
                 uploadBtn.disabled = false;
 
-                // Auto-preview
-                setTimeout(() => generatePreview(true), 500);
+                // Auto-preview (session ready — direct render path)
+                console.log('PREVIEW BOOTSTRAP: session ready → starting first render');
+                generatePreview(true);
 
             } catch (error) {
                 console.error('Mixed file conversion failed:', error);
@@ -428,6 +897,11 @@ document.addEventListener('DOMContentLoaded', function () {
         } else {
             // Single file - use as-is
             currentFile = files[0];
+            console.log('ORIGINAL UPLOAD: Reset due to single file selection');
+            _resetPreviewSessionState(); // File changed — invalidate session
+            currentPreviewFile = await _createPreviewImage(currentFile);
+            if (currentPreviewFile === currentFile) console.log('PREVIEW COMPRESS: skipped (small/non-image)');
+            await createPreviewSession(currentPreviewFile || currentFile);
 
             // Show file info (existing code)
             if (fileInfo) {
@@ -444,8 +918,9 @@ document.addEventListener('DOMContentLoaded', function () {
             previewBtn.disabled = false;
             uploadBtn.disabled = false;
 
-            // Auto-preview
-            setTimeout(() => generatePreview(true), 500);
+            // Auto-preview (session ready — direct render path)
+            console.log('PREVIEW BOOTSTRAP: session ready → starting first render');
+            generatePreview(true);
         }
     });
 
@@ -1074,7 +1549,9 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // Function to generate preview
-    function generatePreview(showLoading = true) {
+    // Phase 2E: Made async to support await on session render path.
+    // All callers are fire-and-forget (setTimeout, direct calls) — safe change.
+    async function generatePreview(showLoading = true) {
         // RACE-CONDITION GUARD: Do not show preview if we have transitioned to Tracking view
         if (isTrackingViewActive) return;
 
@@ -1098,219 +1575,276 @@ document.addEventListener('DOMContentLoaded', function () {
             showPageRangeError('');
         }
 
-        // Create FormData for preview
-        const formData = new FormData();
-        formData.append('file', currentFile);
+        // ── Phase 2E: Dual render path preparation ──────────────────────
+        // Track which render path produced the response.
+        // Phase 2E-2B-A: Both paths run — session render captures data,
+        //                old FormData flow still runs unconditionally.
+        // Phase 2E-2B-B: Will gate old flow behind (!usedSessionRender).
+        let responseData = null;
+        let usedSessionRender = false;
 
-        const shopIdInput = document.querySelector('input[name="shop_id"]');
-        if (shopIdInput) {
-            formData.append('shop_id', shopIdInput.value);
+        if (previewSessionReady && currentPreviewSessionId) {
+            console.log('PREVIEW: Attempting session render path (fast)');
+            try {
+                responseData = await renderPreviewBySession();
+                usedSessionRender = true;
+                console.log('PREVIEW: Session render SUCCESS —',
+                    'sheets=' + responseData.total_pages,
+                    'document_pages=' + responseData.total_document_pages
+                );
+            } catch (err) {
+                console.warn('PREVIEW: Session render FAILED, old flow will handle —', err.message || err);
+                responseData = null;
+                usedSessionRender = false;
+            }
         }
 
-        // Get current print settings
-        // PAGE RANGE FIX: Send page_range (can be empty string for "all pages")
-        const printSettings = {
-            page_range: pageRangeVal || '', // Empty string means "all pages"
-            page_size: pageSize.value,
-            orientation: orientation.value,
-            print_side: printSide.value,
-            color_mode: colorMode.value,
-            layout_pages: layoutPages.value,
-            copies: copies.value,
-            layout_type: (function (v) {
-                switch (v) {
-                    case '1': return 'normal';
-                    case '2': return '2up';
-                    case '4': return '4up';
-                    case '6': return '6up';
-                    case '8': return '8up';
-                    case '9': return '9up';
-                    case '16': return '16up';
-                    default: return 'normal';
+        // ── Shared preview UI update logic ──────────────────────────────
+        // Used by BOTH session render path and old FormData path.
+        // Extracted to avoid duplicating 130+ lines of UI code.
+        function _applyPreviewResponse(data) {
+            // RACE-CONDITION GUARD: Do not update DOM if user navigated to Tracking view
+            if (isTrackingViewActive) return;
+
+            if (!data.success) {
+                throw new Error(data.error || 'Preview failed');
+            }
+
+            // Update backend calculation results as per-copy base values
+            const currentCopies = parseInt(copies ? copies.value : 1) || 1;
+            backendTotalAmount = data.total_amount / currentCopies;
+            backendColorSheets = data.color_sheets;
+            backendBWSheets = data.bw_sheets;
+
+            // PAGE RANGE FIX: Store filtered preview URLs based on page range
+            if (data.previews && Array.isArray(data.previews) && data.previews.length > 0) {
+                previewUrls = data.previews;
+                totalPages = data.total_pages || data.previews.length;
+            } else if (data.preview_url) {
+                previewUrls = [data.preview_url];
+                totalPages = data.total_pages || 1;
+            } else {
+                throw new Error('No preview URLs received');
+            }
+
+            // Reset to first page of filtered selection
+            currentPageIndex = 0;
+
+            // Update preview image
+            if (previewImage) {
+                previewImage.src = previewUrls[0];
+            }
+            if (previewSection) {
+                previewSection.dataset.source = 'print';
+                if (currentMode === 'print') {
+                    previewSection.style.display = 'block';
                 }
-            })(layoutPages.value)
-        };
+            }
 
-        // Debug logging
-        console.log('Layout settings:', {
-            layout_pages: layoutPages.value,
-            layout_type: printSettings.layout_type,
-            all_settings: printSettings
-        });
+            // Update file information
+            const fileSize = (currentFile.size / 1024 / 1024).toFixed(2);
+            previewFilename.textContent = currentFile.name;
+            previewSize.textContent = `${fileSize} MB`;
 
-        // Add print settings to FormData
-        Object.keys(printSettings).forEach(key => {
-            formData.append(key, printSettings[key]);
-        });
+            // LAYOUT FIX: Show correct preview page count based on layout
+            let pageCountText = totalPages.toString();
 
-        // Cancel any previous in-flight PRINT preview request
-        if (printPreviewAbortController) {
-            printPreviewAbortController.abort();
-        }
-        printPreviewAbortController = new AbortController();
-
-        // Create preview
-        fetch('/api/preview', {
-            method: 'POST',
-            body: formData,
-            signal: printPreviewAbortController.signal
-        })
-            .then(response => response.json())
-            .then(data => {
-                // RACE-CONDITION GUARD: Do not update DOM if user navigated to Tracking view
-                if (isTrackingViewActive) return;
-                if (data.success) {
-                    // Update backend calculation results as per-copy base values
-                    const currentCopies = parseInt(copies ? copies.value : 1) || 1;
-                    backendTotalAmount = data.total_amount / currentCopies;
-                    backendColorSheets = data.color_sheets;
-                    backendBWSheets = data.bw_sheets;
-
-                    // PAGE RANGE FIX: Store filtered preview URLs based on page range
-                    if (data.previews && Array.isArray(data.previews) && data.previews.length > 0) {
-                        previewUrls = data.previews;
-                        // total_pages now represents the number of SELECTED pages (after filtering)
-                        totalPages = data.total_pages || data.previews.length;
-                    } else if (data.preview_url) {
-                        // Backward compatibility: single preview URL
-                        previewUrls = [data.preview_url];
-                        totalPages = data.total_pages || 1;
+            if (data.layout_pages && data.layout_pages > 1) {
+                if (data.selected_document_pages && data.total_document_pages) {
+                    if (data.selected_document_pages !== data.total_document_pages) {
+                        pageCountText = `${totalPages} sheets (${data.selected_document_pages} pages, ${data.layout_pages} per sheet)`;
                     } else {
-                        throw new Error('No preview URLs received');
-                    }
-
-                    // Reset to first page of filtered selection
-                    currentPageIndex = 0;
-
-                    // Update preview image
-                    if (previewImage) {
-                        previewImage.src = previewUrls[0];
-                    }
-                    if (previewSection) {
-                        previewSection.dataset.source = 'print';
-                        if (currentMode === 'print') {
-                            previewSection.style.display = 'block';
-                        }
-                    }
-
-                    // Update file information
-                    const fileSize = (currentFile.size / 1024 / 1024).toFixed(2);
-                    previewFilename.textContent = currentFile.name;
-                    previewSize.textContent = `${fileSize} MB`;
-
-                    // LAYOUT FIX: Show correct preview page count based on layout
-                    // totalPages now represents preview sheets (after layout combining)
-                    // If layout is applied, show layout info; if page range is applied, show range info
-                    let pageCountText = totalPages.toString();
-
-                    if (data.layout_pages && data.layout_pages > 1) {
-                        // Layout is applied - show sheet count
-                        if (data.selected_document_pages && data.total_document_pages) {
-                            // Page range might also be applied
-                            if (data.selected_document_pages !== data.total_document_pages) {
-                                pageCountText = `${totalPages} sheets (${data.selected_document_pages} pages, ${data.layout_pages} per sheet)`;
-                            } else {
-                                pageCountText = `${totalPages} sheets (${data.layout_pages} per sheet)`;
-                            }
-                        } else {
-                            pageCountText = `${totalPages} sheets (${data.layout_pages} per sheet)`;
-                        }
-                    } else if (data.total_document_pages && data.total_document_pages !== totalPages) {
-                        // Only page range is applied (no layout)
-                        pageCountText = `${totalPages} (of ${data.total_document_pages})`;
-                    }
-
-                    previewPages.textContent = pageCountText;
-
-                    // Update current page count for price calculation
-                    // Use selected_document_pages if available (actual pages to print), otherwise use totalPages
-                    // BILLING FIX: Price is CALCULATED per physical sheet (printed side)
-                    // totalPages already represents calculated preview sheets (after layout).
-                    currentPageCount = totalPages;
-
-                    // Update price display
-                    updatePriceDisplay();
-
-                    // PAGE RANGE FIX: Show warning if page range had issues
-                    if (data.page_range_warning) {
-                        showPageRangeError(data.page_range_warning);
-                    }
-
-                    // Update layout info
-                    const layoutText = (function (v) {
-                        switch (v) {
-                            case '1': return '1 per sheet';
-                            case '2': return '2 per sheet';
-                            case '4': return '4 per sheet';
-                            case '6': return '6 per sheet';
-                            case '8': return '8 per sheet';
-                            case '9': return '9 per sheet';
-                            case '16': return '16 per sheet';
-                            default: return '1 per sheet';
-                        }
-                    })(layoutPages.value);
-                    previewLayout.textContent = layoutText;
-
-                    // Update other customization details
-                    if (previewOrientation) previewOrientation.textContent = orientation.value;
-                    if (previewPrintSide) previewPrintSide.textContent = printSide.value;
-                    if (previewColorMode) previewColorMode.textContent = colorMode.value;
-                    if (previewCopies) previewCopies.textContent = copies.value;
-                    if (previewPageRange) previewPageRange.textContent = pageRangeInput.value || 'All Pages';
-
-                    // Show/hide navigation controls based on page count
-                    if (totalPages > 1) {
-                        if (prevPageBtn) {
-                            prevPageBtn.style.display = 'inline-block';
-                            prevPageBtn.disabled = true;
-                            prevPageBtn.style.opacity = '0.5';
-                        }
-                        if (nextPageBtn) {
-                            nextPageBtn.style.display = 'inline-block';
-                            nextPageBtn.disabled = totalPages <= 1;
-                            nextPageBtn.style.opacity = totalPages <= 1 ? '0.5' : '1';
-                        }
-                        if (pageIndicator) {
-                            pageIndicator.style.display = 'inline-block';
-                            pageIndicator.textContent = `Page 1 of ${totalPages}`;
-                        }
-                    } else {
-                        // Single page: hide navigation
-                        if (prevPageBtn) prevPageBtn.style.display = 'none';
-                        if (nextPageBtn) nextPageBtn.style.display = 'none';
-                        if (pageIndicator) pageIndicator.style.display = 'none';
-                    }
-
-                    // Reset zoom and rotation
-                    currentZoom = 1;
-                    currentRotation = 0;
-                    updateImageTransform();
-
-                    if (showLoading) {
-                        scrollToElement(previewSection);
-                    } else {
-                        setTimeout(() => scrollToElement(previewSection), 300);
+                        pageCountText = `${totalPages} sheets (${data.layout_pages} per sheet)`;
                     }
                 } else {
-                    throw new Error(data.error || 'Preview failed');
+                    pageCountText = `${totalPages} sheets (${data.layout_pages} per sheet)`;
                 }
-            })
-            .catch(error => {
-                // Silently ignore aborted requests (user changed settings again)
-                if (error.name === 'AbortError') {
-                    console.info('PRINT preview request aborted (superseded by newer request)');
-                    return;
+            } else if (data.total_document_pages && data.total_document_pages !== totalPages) {
+                pageCountText = `${totalPages} (of ${data.total_document_pages})`;
+            }
+
+            previewPages.textContent = pageCountText;
+
+            // Update current page count for price calculation
+            currentPageCount = totalPages;
+
+            // Update price display
+            updatePriceDisplay();
+
+            // PAGE RANGE FIX: Show warning if page range had issues
+            if (data.page_range_warning) {
+                showPageRangeError(data.page_range_warning);
+            }
+
+            // Update layout info
+            const layoutText = (function (v) {
+                switch (v) {
+                    case '1': return '1 per sheet';
+                    case '2': return '2 per sheet';
+                    case '4': return '4 per sheet';
+                    case '6': return '6 per sheet';
+                    case '8': return '8 per sheet';
+                    case '9': return '9 per sheet';
+                    case '16': return '16 per sheet';
+                    default: return '1 per sheet';
                 }
-                console.error('Preview error:', error);
+            })(layoutPages.value);
+            previewLayout.textContent = layoutText;
+
+            // Update other customization details
+            if (previewOrientation) previewOrientation.textContent = orientation.value;
+            if (previewPrintSide) previewPrintSide.textContent = printSide.value;
+            if (previewColorMode) previewColorMode.textContent = colorMode.value;
+            // Phase 3E: Update Color Page Range display
+            if (previewColorPageRange) {
+                previewColorPageRange.textContent = getColorPageRangeDisplay(colorMode.value, parsedColorPages);
+            }
+            if (previewCopies) previewCopies.textContent = copies.value;
+            if (previewPageRange) previewPageRange.textContent = pageRangeInput.value || 'All Pages';
+
+            // Show/hide navigation controls based on page count
+            if (totalPages > 1) {
+                if (prevPageBtn) {
+                    prevPageBtn.style.display = 'inline-block';
+                    prevPageBtn.disabled = true;
+                    prevPageBtn.style.opacity = '0.5';
+                }
+                if (nextPageBtn) {
+                    nextPageBtn.style.display = 'inline-block';
+                    nextPageBtn.disabled = totalPages <= 1;
+                    nextPageBtn.style.opacity = totalPages <= 1 ? '0.5' : '1';
+                }
+                if (pageIndicator) {
+                    pageIndicator.style.display = 'inline-block';
+                    pageIndicator.textContent = `Page 1 of ${totalPages}`;
+                }
+            } else {
+                if (prevPageBtn) prevPageBtn.style.display = 'none';
+                if (nextPageBtn) nextPageBtn.style.display = 'none';
+                if (pageIndicator) pageIndicator.style.display = 'none';
+            }
+
+            // Reset zoom and rotation
+            currentZoom = 1;
+            currentRotation = 0;
+            updateImageTransform();
+
+            if (showLoading) {
+                scrollToElement(previewSection);
+            } else {
+                setTimeout(() => scrollToElement(previewSection), 300);
+            }
+        }
+
+        // ── Phase 2E: Primary path = session render, fallback = old upload ──
+        if (usedSessionRender) {
+            // ── SESSION RENDER PATH (fast — no file upload) ─────────────
+            // responseData already populated by renderPreviewBySession() above.
+            // Apply directly to UI — skips FormData creation, file upload,
+            // get_page_count, classify_color_pages entirely.
+            console.log('PREVIEW: Using session render response (fast path)');
+            try {
+                _applyPreviewResponse(responseData);
+            } catch (err) {
+                console.error('PREVIEW: Session render response application failed:', err);
                 if (showLoading) {
-                    alert('Failed to create preview: ' + error.message);
+                    alert('Failed to create preview: ' + err.message);
                 }
-            })
-            .finally(() => {
+            } finally {
                 if (previewLoading) {
                     previewLoading.style.display = 'none';
                 }
+            }
+        } else {
+            // ── OLD UPLOAD PATH (fallback — full file re-upload) ────────
+            // This runs when:
+            //   1. No session exists yet (first preview before session created)
+            //   2. Session render failed (network error, expired session, etc.)
+            // Behavior is 100% identical to pre-Phase-2E.
+            console.log('PREVIEW: Using old FormData upload path (fallback)');
+
+            // Create FormData for preview
+            const formData = new FormData();
+            formData.append('file', currentFile);
+
+            const shopIdInput = document.querySelector('input[name="shop_id"]');
+            if (shopIdInput) {
+                formData.append('shop_id', shopIdInput.value);
+            }
+
+            // Get current print settings
+            const printSettings = {
+                page_range: pageRangeVal || '',
+                page_size: pageSize.value,
+                orientation: orientation.value,
+                print_side: printSide.value,
+                color_mode: colorMode.value,
+                layout_pages: layoutPages.value,
+                copies: copies.value,
+                layout_type: (function (v) {
+                    switch (v) {
+                        case '1': return 'normal';
+                        case '2': return '2up';
+                        case '4': return '4up';
+                        case '6': return '6up';
+                        case '8': return '8up';
+                        case '9': return '9up';
+                        case '16': return '16up';
+                        default: return 'normal';
+                    }
+                })(layoutPages.value)
+            };
+
+            // Phase 2: Include color_pages for mixed preview (legacy FormData path)
+            if (parsedColorPages && parsedColorPages.size > 0 && colorMode.value === 'Color') {
+                printSettings.color_pages = JSON.stringify(Array.from(parsedColorPages));
+            }
+
+            // Debug logging
+            console.log('Layout settings:', {
+                layout_pages: layoutPages.value,
+                layout_type: printSettings.layout_type,
+                all_settings: printSettings
             });
+
+            // Add print settings to FormData
+            Object.keys(printSettings).forEach(key => {
+                formData.append(key, printSettings[key]);
+            });
+
+            // Cancel any previous in-flight PRINT preview request
+            if (printPreviewAbortController) {
+                printPreviewAbortController.abort();
+            }
+            printPreviewAbortController = new AbortController();
+
+            // Create preview via old upload path
+            fetch('/api/preview', {
+                method: 'POST',
+                body: formData,
+                signal: printPreviewAbortController.signal
+            })
+                .then(response => response.json())
+                .then(data => {
+                    _applyPreviewResponse(data);
+                })
+                .catch(error => {
+                    // Silently ignore aborted requests (user changed settings again)
+                    if (error.name === 'AbortError') {
+                        console.info('PRINT preview request aborted (superseded by newer request)');
+                        return;
+                    }
+                    console.error('Preview error:', error);
+                    if (showLoading) {
+                        alert('Failed to create preview: ' + error.message);
+                    }
+                })
+                .finally(() => {
+                    if (previewLoading) {
+                        previewLoading.style.display = 'none';
+                    }
+                });
+        }
     }
 
     // Edit button handler
@@ -1636,6 +2170,10 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (previewOrientation) previewOrientation.textContent = opts.orientation;
                     if (previewPrintSide) previewPrintSide.textContent = xeroxPrintSide.value;
                     if (previewColorMode) previewColorMode.textContent = opts.color_mode;
+                    // Phase 3E: Update Color Page Range display (XEROX path)
+                    if (previewColorPageRange) {
+                        previewColorPageRange.textContent = getColorPageRangeDisplay(opts.color_mode, xeroxParsedColorPages);
+                    }
                     if (previewCopies) previewCopies.textContent = xeroxCopies.value;
                     if (previewPageRange) previewPageRange.textContent = opts.page_range || 'All Pages';
 
@@ -2028,8 +2566,94 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // Upload form handler (PRINT flow only)
-    uploadForm.addEventListener('submit', function (e) {
+    // ── Background Original Upload (Phase 4) ─────────────────────────────
+    // Uploads the ORIGINAL full-resolution file silently in the background
+    // after the preview session is created.  The user sees previews while
+    // this runs.  On Print click, if ready → instant submit via
+    // /api/print/submit.  If not → wait briefly or fall back to /api/upload.
+    //
+    // Rollback: Delete this function + the 3 state variables above.
+    //           Revert uploadForm submit handler to legacy-only.
+
+    /**
+     * Start background upload of the original file to /api/original/upload.
+     *
+     * Safety guarantees:
+     *   - Never throws (all errors caught)
+     *   - Never blocks preview rendering
+     *   - Supports AbortController for file-change abort
+     *   - Status tracked via originalUploadStatus
+     *   - Failure is silent — fallback handles it on Print click
+     *
+     * @param {File} file - The ORIGINAL full-resolution file (NOT preview)
+     * @param {string} sessionId - The preview session ID to associate with
+     */
+    function startBackgroundOriginalUpload(file, sessionId) {
+        if (!file || !sessionId) return;
+        if (originalUploadStatus === 'uploading') {
+            console.log('ORIGINAL UPLOAD: Already in progress, skipping');
+            return;
+        }
+        if (originalUploadStatus === 'ready') {
+            console.log('ORIGINAL UPLOAD: Already ready, skipping');
+            return;
+        }
+
+        originalUploadStatus = 'uploading';
+        originalUploadAbortController = new AbortController();
+
+        console.log('ORIGINAL UPLOAD: Starting background upload —',
+            'size=' + (file.size / (1024 * 1024)).toFixed(1) + 'MB',
+            'session=' + sessionId.substring(0, 8)
+        );
+
+        var formData = new FormData();
+        formData.append('file', file, file.name);
+        formData.append('preview_session_id', sessionId);
+
+        originalUploadPromise = fetch('/api/original/upload', {
+            method: 'POST',
+            body: formData,
+            signal: originalUploadAbortController.signal
+        })
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
+            if (data.success && data.original_ready) {
+                originalUploadStatus = 'ready';
+                console.log('ORIGINAL UPLOAD: Frontend state set to READY', {
+                    sessionId: sessionId ? sessionId.substring(0, 8) : null,
+                    currentPreviewSessionId: currentPreviewSessionId ? currentPreviewSessionId.substring(0, 8) : null,
+                    sessionMatch: sessionId === currentPreviewSessionId,
+                    hasCurrentFile: !!currentFile
+                });
+            } else {
+                originalUploadStatus = 'failed';
+                console.warn('ORIGINAL UPLOAD: Server returned failure —',
+                    data.error || 'unknown');
+            }
+        })
+        .catch(function(err) {
+            if (err.name === 'AbortError') {
+                console.log('ORIGINAL UPLOAD: Aborted (file changed)');
+                originalUploadStatus = 'idle';
+            } else {
+                originalUploadStatus = 'failed';
+                console.warn('ORIGINAL UPLOAD: Network error —', err.message);
+            }
+        });
+    }
+
+
+    // ── Upload form handler (PRINT flow) ─────────────────────────────────
+    // Phase 5: Three-tier print submit:
+    //   FAST PATH:     original ready → /api/print/submit (JSON, instant)
+    //   WAIT PATH:     original uploading → await, then fast submit
+    //   FALLBACK PATH: original failed/timeout → /api/upload (legacy)
+    //
+    // Rollback: Replace entire handler with pre-Phase-5 version
+    //           (straight /api/upload with FormData)
+
+    uploadForm.addEventListener('submit', async function (e) {
         e.preventDefault();
 
         // Double-submit guard
@@ -2051,80 +2675,229 @@ document.addEventListener('DOMContentLoaded', function () {
             showPageRangeError('Invalid page range. Use format: 1-3, 5, 7-9 (numbers, commas, dashes only)');
             return;
         } else {
-            // Clear error if valid
             showPageRangeError('');
         }
 
+        _uploadInFlight = true;
 
-        // Build FormData manually to use currentFile (combined PDF) instead of HTML input
-        const formData = new FormData();
-        formData.append('file', currentFile, currentFile.name);
-
-        // Manually copy all other form fields from uploadForm (except 'file')
-        new FormData(uploadForm).forEach((value, key) => {
-            if (key !== 'file') {
-                formData.append(key, value);
-            }
+        // ── DEBUG: Full state snapshot at print-click time ─────────────
+        console.log('PRINT DEBUG:', {
+            originalUploadStatus: originalUploadStatus,
+            currentPreviewSessionId: currentPreviewSessionId ? currentPreviewSessionId.substring(0, 8) : null,
+            previewSessionReady: previewSessionReady,
+            hasCurrentFile: !!currentFile,
+            hasOriginalUploadPromise: !!originalUploadPromise,
+            fileName: currentFile ? currentFile.name : null,
+            fileSize: currentFile ? (currentFile.size / (1024 * 1024)).toFixed(1) + 'MB' : null
         });
 
-        // Add layout and page range data
-        formData.set('layout_pages', layoutPages.value);
-        formData.set('layout_type', (function (v) {
-            switch (v) {
-                case '1': return 'normal';
-                case '2': return '2up';
-                case '4': return '4up';
-                case '6': return '6up';
-                case '8': return '8up';
-                case '9': return '9up';
-                case '16': return '16up';
-                default: return 'normal';
+        // ── Helper: collect print settings as JSON ───────────────────────
+        function _collectPrintSettings() {
+            var shopIdInput = document.querySelector('input[name="shop_id"]');
+            var settings = {
+                shop_id: shopIdInput ? shopIdInput.value : null,
+                page_range: prVal,
+                copies: parseInt(copies.value, 10) || 1,
+                page_size: pageSize.value,
+                orientation: orientation.value,
+                print_side: printSide.value,
+                color_mode: colorMode.value,
+                layout_pages: parseInt(layoutPages.value, 10) || 1,
+                layout_type: (function (v) {
+                    switch (v) {
+                        case '1': return 'normal';
+                        case '2': return '2up';
+                        case '4': return '4up';
+                        case '6': return '6up';
+                        case '8': return '8up';
+                        case '9': return '9up';
+                        case '16': return '16up';
+                        default: return 'normal';
+                    }
+                })(layoutPages.value)
+            };
+            // Phase 3A: Include color_pages for mixed color/BW billing
+            if (parsedColorPages && parsedColorPages.size > 0 && colorMode.value === 'Color') {
+                settings.color_pages = Array.from(parsedColorPages);
             }
-        })(layoutPages.value));
-        if (pageRangeInput) {
-            formData.set('page_range', prVal);
+            return settings;
         }
 
-        // Show loading
-        _uploadInFlight = true;
-        uploadBtn.innerHTML = '<span class="loading"></span> Uploading...';
-        uploadBtn.disabled = true;
+        // ── Helper: handle successful print job response ─────────────────
+        function _handlePrintSuccess(data) {
+            currentJobId = data.job_id;
+            showStatusSection();
+            initSingleJobPanel();
+            startSingleJobPolling();
+            previewSection.style.display = 'none';
+            uploadForm.reset();
+            currentFile = null;
+            console.log('ORIGINAL UPLOAD: Reset due to print success (post-submit cleanup)');
+            _resetPreviewSessionState();
+            fileInfo.innerHTML = '';
+            previewBtn.disabled = true;
+            uploadBtn.disabled = true;
+        }
 
-        // Upload file
-        fetch('/api/upload', {
-            method: 'POST',
-            body: formData
-        })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    currentJobId = data.job_id;
-                    showStatusSection();
-                    initSingleJobPanel();
-                    startSingleJobPolling();
+        // ── Helper: legacy /api/upload fallback ──────────────────────────
+        function _legacyUpload() {
+            console.log('PRINT: Using legacy /api/upload fallback');
+            uploadBtn.innerHTML = '<span class="loading"></span> Uploading...';
 
-                    // Hide preview section if visible
-                    previewSection.style.display = 'none';
+            var formData = new FormData();
+            formData.append('file', currentFile, currentFile.name);
 
-                    // Reset form
-                    uploadForm.reset();
-                    currentFile = null;
-                    fileInfo.innerHTML = '';
-                    previewBtn.disabled = true;
-                    uploadBtn.disabled = true;
-                } else {
-                    throw new Error(data.error || 'Upload failed');
-                }
-            })
-            .catch(error => {
-                console.error('Upload error:', error);
-                alert('Upload failed: ' + error.message);
-            })
-            .finally(() => {
-                _uploadInFlight = false;
-                uploadBtn.innerHTML = 'Upload & Print';
-                uploadBtn.disabled = false;
+            new FormData(uploadForm).forEach(function(value, key) {
+                if (key !== 'file') formData.append(key, value);
             });
+
+            formData.set('layout_pages', layoutPages.value);
+            formData.set('layout_type', (function (v) {
+                switch (v) {
+                    case '1': return 'normal';
+                    case '2': return '2up';
+                    case '4': return '4up';
+                    case '6': return '6up';
+                    case '8': return '8up';
+                    case '9': return '9up';
+                    case '16': return '16up';
+                    default: return 'normal';
+                }
+            })(layoutPages.value));
+            if (pageRangeInput) formData.set('page_range', prVal);
+
+            // Phase 3A: Include color_pages for mixed color/BW billing
+            if (parsedColorPages && parsedColorPages.size > 0 && colorMode.value === 'Color') {
+                formData.set('color_pages', JSON.stringify(Array.from(parsedColorPages)));
+            }
+
+            return fetch('/api/upload', { method: 'POST', body: formData })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        _handlePrintSuccess(data);
+                    } else {
+                        throw new Error(data.error || 'Upload failed');
+                    }
+                });
+        }
+
+        try {
+            // ═══ FAST PATH: Original already uploaded → instant submit ═══
+            if (originalUploadStatus === 'ready' && currentPreviewSessionId) {
+                console.log('PRINT: Fast path — original ready, using /api/print/submit');
+                console.log('PRINT: Fast path activated', { sessionId: currentPreviewSessionId ? currentPreviewSessionId.substring(0, 8) : null });
+                uploadBtn.innerHTML = '<span class="loading"></span> Creating print job...';
+                uploadBtn.disabled = true;
+
+                var settings = _collectPrintSettings();
+                settings.preview_session_id = currentPreviewSessionId;
+
+                try {
+                    var response = await fetch('/api/print/submit', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(settings)
+                    });
+                    var data = await response.json();
+
+                    if (data.success) {
+                        console.log('PRINT: Fast path SUCCESS — job=' + data.job_id);
+                        _handlePrintSuccess(data);
+                        return;  // Done — instant!
+                    }
+
+                    // Fast path returned error — check if fallback needed
+                    if (data.fallback_required) {
+                        console.warn('PRINT: Fast path failed, falling back —', data.error);
+                        await _legacyUpload();
+                        return;
+                    }
+
+                    throw new Error(data.error || 'Print submit failed');
+
+                } catch (fastErr) {
+                    console.warn('PRINT: Fast path error, trying legacy —', fastErr.message);
+                    try {
+                        await _legacyUpload();
+                    } catch (legacyErr) {
+                        console.error('PRINT: Legacy fallback also failed:', legacyErr);
+                        alert('Upload failed: ' + legacyErr.message);
+                    }
+                    return;
+                }
+            }
+
+            // ═══ WAIT PATH: Upload in progress → wait, then fast submit ══
+            if (originalUploadStatus === 'uploading' && originalUploadPromise && currentPreviewSessionId) {
+                console.log('PRINT: Wait path — original uploading, waiting...');
+                console.log('PRINT: Wait path activated', { sessionId: currentPreviewSessionId ? currentPreviewSessionId.substring(0, 8) : null });
+                uploadBtn.innerHTML = '<span class="loading"></span> Finishing upload...';
+                uploadBtn.disabled = true;
+
+                // Wait up to 15s for background upload to finish
+                var waitTimeout = new Promise(function(resolve) {
+                    setTimeout(function() { resolve('timeout'); }, 15000);
+                });
+
+                var waitResult = await Promise.race([
+                    originalUploadPromise.then(function() { return 'done'; }),
+                    waitTimeout
+                ]);
+
+                if (waitResult === 'done' && originalUploadStatus === 'ready') {
+                    console.log('PRINT: Wait path → upload finished, using fast submit');
+                    uploadBtn.innerHTML = '<span class="loading"></span> Creating print job...';
+
+                    try {
+                        var settings2 = _collectPrintSettings();
+                        settings2.preview_session_id = currentPreviewSessionId;
+
+                        var response2 = await fetch('/api/print/submit', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(settings2)
+                        });
+                        var data2 = await response2.json();
+
+                        if (data2.success) {
+                            console.log('PRINT: Wait→Fast SUCCESS — job=' + data2.job_id);
+                            _handlePrintSuccess(data2);
+                            return;
+                        }
+                    } catch (waitFastErr) {
+                        console.warn('PRINT: Wait→Fast failed:', waitFastErr.message);
+                    }
+                }
+
+                // Wait path failed or timed out → legacy fallback
+                console.log('PRINT: Wait path failed/timed out, using legacy');
+            }
+
+            // ═══ FALLBACK PATH: Legacy /api/upload (current behavior) ════
+            console.log('PRINT: Legacy fallback activated', {
+                originalUploadStatus: originalUploadStatus,
+                hasSessionId: !!currentPreviewSessionId,
+                hasPromise: !!originalUploadPromise,
+                reason: !currentPreviewSessionId ? 'no session ID' :
+                        originalUploadStatus === 'idle' ? 'upload never started' :
+                        originalUploadStatus === 'failed' ? 'upload failed' :
+                        'unknown'
+            });
+            console.log('PRINT: Fallback path — using legacy /api/upload');
+            uploadBtn.innerHTML = '<span class="loading"></span> Uploading...';
+            uploadBtn.disabled = true;
+
+            await _legacyUpload();
+
+        } catch (error) {
+            console.error('Upload error:', error);
+            alert('Upload failed: ' + error.message);
+        } finally {
+            _uploadInFlight = false;
+            uploadBtn.innerHTML = 'Upload & Print';
+            uploadBtn.disabled = false;
+        }
     });
 
     // Show status section
@@ -4180,4 +4953,408 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // COLOR PAGE RANGE — Phase 1: UI + Parser + Validation (frontend-only)
+    // ════════════════════════════════════════════════════════════════════════
+    // Rollback: Delete everything from here to the matching END comment.
+    //           Remove setupColorPageRange() call above.
+    //           Remove 4 state variables above.
+    //           Remove HTML elements (colorPageRangeGroup, xeroxColorPageRangeGroup).
+    //           Remove CSS (.color-page-range-*).
+    //           Zero impact on any existing flow.
+
+    /**
+     * Parse a color page range string into a normalized Set of page numbers.
+     *
+     * Supports:
+     *   - Single pages: "1,3,5"
+     *   - Ranges: "1-5"
+     *   - Mixed: "1-2,5,8-10"
+     *   - Spaces: "2 - 4 , 9"
+     *
+     * Returns: { pages: Set<number>, errors: string[] }
+     *
+     * Safety: NEVER throws. Returns empty set + error messages on invalid input.
+     *
+     * @param {string} input - Raw user input string
+     * @param {number|null} maxPage - Maximum valid page number (document page count), or null to skip bounds check
+     * @returns {{ pages: Set<number>, errors: string[] }}
+     */
+    function parseColorPageRange(input, maxPage) {
+        var result = { pages: new Set(), errors: [] };
+
+        // Guard: empty/null input
+        if (!input || typeof input !== 'string') {
+            return result;
+        }
+
+        // Normalize: strip all whitespace around delimiters
+        var trimmed = input.trim();
+        if (!trimmed) {
+            return result;
+        }
+
+        // Reject any characters that aren't digits, commas, dashes, or whitespace
+        if (/[^\d,\-\s]/.test(trimmed)) {
+            result.errors.push('Only numbers, commas, dashes, and spaces are allowed.');
+            return result;
+        }
+
+        // Split by comma
+        var segments = trimmed.split(',');
+
+        for (var i = 0; i < segments.length; i++) {
+            var segment = segments[i].trim();
+            if (!segment) continue; // skip empty segments from trailing commas
+
+            if (segment.indexOf('-') !== -1) {
+                // ── Range segment (e.g., "1-5") ─────────────────────────
+                var parts = segment.split('-').map(function(s) { return s.trim(); });
+
+                // Filter out empty parts from leading/trailing dashes
+                parts = parts.filter(function(p) { return p !== ''; });
+
+                if (parts.length !== 2) {
+                    result.errors.push('Invalid range: "' + segment + '". Use format: start-end');
+                    continue;
+                }
+
+                var start = parseInt(parts[0], 10);
+                var end = parseInt(parts[1], 10);
+
+                if (isNaN(start) || isNaN(end)) {
+                    result.errors.push('Non-numeric range: "' + segment + '"');
+                    continue;
+                }
+
+                if (start <= 0 || end <= 0) {
+                    result.errors.push('Page numbers must be positive: "' + segment + '"');
+                    continue;
+                }
+
+                if (start > end) {
+                    result.errors.push('Reverse range not allowed: "' + segment + '" (start must be ≤ end)');
+                    continue;
+                }
+
+                if (maxPage !== null && maxPage !== undefined) {
+                    if (start > maxPage || end > maxPage) {
+                        result.errors.push('Pages ' + start + '-' + end + ' exceed document length (' + maxPage + ' pages)');
+                        continue;
+                    }
+                }
+
+                // Add all pages in range (inclusive)
+                for (var p = start; p <= end; p++) {
+                    result.pages.add(p);
+                }
+
+            } else {
+                // ── Single page (e.g., "5") ──────────────────────────────
+                var page = parseInt(segment, 10);
+
+                if (isNaN(page)) {
+                    result.errors.push('Invalid page number: "' + segment + '"');
+                    continue;
+                }
+
+                if (page <= 0) {
+                    result.errors.push('Page numbers must be positive: "' + segment + '"');
+                    continue;
+                }
+
+                if (maxPage !== null && maxPage !== undefined && page > maxPage) {
+                    result.errors.push('Page ' + page + ' exceeds document length (' + maxPage + ' pages)');
+                    continue;
+                }
+
+                result.pages.add(page);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Validate color page range input and update parsed state.
+     *
+     * This is the single entry point for validation. It:
+     *   1. Parses the raw string via parseColorPageRange()
+     *   2. Updates the appropriate state variables
+     *   3. Returns validation result for UI feedback
+     *
+     * @param {string} rawInput - Raw user input
+     * @param {string} mode - 'print' or 'xerox'
+     * @returns {{ valid: boolean, pages: Set<number>, errors: string[] }}
+     */
+    function validateColorPageRange(rawInput, mode) {
+        // Determine max page count based on mode
+        var maxPage = null;
+        if (mode === 'xerox') {
+            // For xerox, use scanned page count
+            maxPage = scannedPages ? scannedPages.length : null;
+        } else {
+            // For print, use totalPages from preview or currentPageCount
+            // Note: totalPages is the sheet count after layout, we want document pages
+            // Use currentPageCount as best available — this is sheets, not doc pages,
+            // but without backend call we can't know exact doc pages.
+            // Future phases will refine this with session metadata.
+            maxPage = currentPageCount > 0 ? currentPageCount : null;
+        }
+
+        var parsed = parseColorPageRange(rawInput, maxPage);
+
+        // Update state
+        if (mode === 'xerox') {
+            xeroxColorPageSelection = rawInput || '';
+            xeroxParsedColorPages = parsed.pages;
+        } else {
+            colorPageSelection = rawInput || '';
+            parsedColorPages = parsed.pages;
+        }
+
+        var valid = parsed.errors.length === 0;
+
+        // Log state update for debugging (non-invasive)
+        if (rawInput && rawInput.trim()) {
+            console.log('COLOR PAGES:', {
+                mode: mode,
+                input: rawInput,
+                valid: valid,
+                pageCount: parsed.pages.size,
+                pages: Array.from(parsed.pages).sort(function(a, b) { return a - b; }),
+                errors: parsed.errors
+            });
+        }
+
+        return {
+            valid: valid,
+            pages: parsed.pages,
+            errors: parsed.errors
+        };
+    }
+
+    /**
+     * Show or clear a validation error on a color page range field.
+     *
+     * @param {string} mode - 'print' or 'xerox'
+     * @param {string} message - Error message to show (empty string to clear)
+     */
+    function showColorPageRangeError(mode, message) {
+        var errorId = mode === 'xerox' ? 'xeroxColorPageRangeError' : 'colorPageRangeError';
+        var inputId = mode === 'xerox' ? 'xeroxColorPageRange' : 'colorPageRange';
+        var errorEl = document.getElementById(errorId);
+        var inputEl = document.getElementById(inputId);
+
+        if (errorEl) {
+            if (message) {
+                errorEl.textContent = message;
+                errorEl.classList.add('visible');
+            } else {
+                errorEl.textContent = '';
+                errorEl.classList.remove('visible');
+            }
+        }
+
+        if (inputEl) {
+            if (message) {
+                inputEl.classList.add('has-error');
+            } else {
+                inputEl.classList.remove('has-error');
+            }
+        }
+    }
+
+    /**
+     * Toggle visibility of the Color Page Range field based on Color Mode selection.
+     *
+     * @param {string} mode - 'print' or 'xerox'
+     * @param {string} colorModeValue - Current value of the Color Mode dropdown
+     */
+    function toggleColorPageRangeVisibility(mode, colorModeValue) {
+        var groupId = mode === 'xerox' ? 'xeroxColorPageRangeGroup' : 'colorPageRangeGroup';
+        var group = document.getElementById(groupId);
+        if (!group) return;
+
+        if (colorModeValue === 'Color') {
+            group.style.display = 'block';
+            // Use requestAnimationFrame to ensure display:block is applied before adding class
+            requestAnimationFrame(function() {
+                group.classList.add('visible');
+            });
+        } else {
+            group.classList.remove('visible');
+            // After transition completes, hide completely
+            setTimeout(function() {
+                if (!group.classList.contains('visible')) {
+                    group.style.display = 'none';
+                }
+            }, 350); // Slightly longer than CSS transition (300ms)
+
+            // Clear input and state when hiding
+            var inputId = mode === 'xerox' ? 'xeroxColorPageRange' : 'colorPageRange';
+            var inputEl = document.getElementById(inputId);
+            if (inputEl) {
+                inputEl.value = '';
+            }
+            showColorPageRangeError(mode, '');
+
+            // Reset state
+            if (mode === 'xerox') {
+                xeroxColorPageSelection = '';
+                xeroxParsedColorPages = new Set();
+            } else {
+                colorPageSelection = '';
+                parsedColorPages = new Set();
+            }
+        }
+    }
+
+    /**
+     * Setup Color Page Range conditional UI and input listeners.
+     *
+     * Wires:
+     *   1. Color Mode dropdowns → show/hide Color Page Range field
+     *   2. Color Page Range inputs → real-time validation with debounce
+     *   3. Blur events → immediate validation
+     *
+     * This function is called ONCE during initialization.
+     * It does NOT trigger any backend calls, preview rerenders, or uploads.
+     *
+     * Rollback: Delete this function + remove setupColorPageRange() call.
+     */
+    function setupColorPageRange() {
+        // ── PRINT form: Color Mode change → toggle field ─────────────────
+        if (colorMode) {
+            colorMode.addEventListener('change', function() {
+                toggleColorPageRangeVisibility('print', colorMode.value);
+            });
+            // Set initial state (in case browser restores form values)
+            toggleColorPageRangeVisibility('print', colorMode.value);
+        }
+
+        // ── XEROX form: Color Mode change → toggle field ─────────────────
+        if (xeroxColorMode) {
+            xeroxColorMode.addEventListener('change', function() {
+                toggleColorPageRangeVisibility('xerox', xeroxColorMode.value);
+            });
+            // Set initial state
+            toggleColorPageRangeVisibility('xerox', xeroxColorMode.value);
+        }
+
+        // ── PRINT form: Color Page Range input listener ──────────────────
+        var printColorPageInput = document.getElementById('colorPageRange');
+        if (printColorPageInput) {
+            var printDebounceTimer = null;
+
+            printColorPageInput.addEventListener('input', function() {
+                var rawVal = printColorPageInput.value;
+
+                // Immediate lightweight validation on every keystroke
+                if (rawVal.trim() && /[^\d,\-\s]/.test(rawVal)) {
+                    showColorPageRangeError('print', 'Only numbers, commas, dashes, and spaces are allowed.');
+                    return;
+                }
+
+                // Debounce full validation (avoid excessive parsing during fast typing)
+                if (printDebounceTimer) clearTimeout(printDebounceTimer);
+                printDebounceTimer = setTimeout(function() {
+                    var result = validateColorPageRange(rawVal, 'print');
+                    if (!rawVal.trim()) {
+                        showColorPageRangeError('print', '');
+                        // Phase 2: Re-render preview without color pages (cleared)
+                        if (currentFile) updatePreviewWithDelay();
+                    } else if (!result.valid) {
+                        showColorPageRangeError('print', result.errors[0]);
+                    } else {
+                        showColorPageRangeError('print', '');
+                        // Phase 2: Re-render preview with new color pages
+                        if (currentFile) updatePreviewWithDelay();
+                    }
+                }, 400);
+            });
+
+            // Immediate validation on blur
+            printColorPageInput.addEventListener('blur', function() {
+                if (printDebounceTimer) {
+                    clearTimeout(printDebounceTimer);
+                    printDebounceTimer = null;
+                }
+                var rawVal = printColorPageInput.value;
+                if (!rawVal.trim()) {
+                    showColorPageRangeError('print', '');
+                    colorPageSelection = '';
+                    parsedColorPages = new Set();
+                    // Phase 2: Re-render preview without color pages
+                    if (currentFile) updatePreviewWithDelay();
+                    return;
+                }
+                var result = validateColorPageRange(rawVal, 'print');
+                if (!result.valid) {
+                    showColorPageRangeError('print', result.errors[0]);
+                } else {
+                    showColorPageRangeError('print', '');
+                    // Phase 2: Re-render preview with new color pages
+                    if (currentFile) updatePreviewWithDelay();
+                }
+            });
+        }
+
+        // ── XEROX form: Color Page Range input listener ──────────────────
+        var xeroxColorPageInput = document.getElementById('xeroxColorPageRange');
+        if (xeroxColorPageInput) {
+            var xeroxDebounceTimer = null;
+
+            xeroxColorPageInput.addEventListener('input', function() {
+                var rawVal = xeroxColorPageInput.value;
+
+                // Immediate lightweight validation on every keystroke
+                if (rawVal.trim() && /[^\d,\-\s]/.test(rawVal)) {
+                    showColorPageRangeError('xerox', 'Only numbers, commas, dashes, and spaces are allowed.');
+                    return;
+                }
+
+                // Debounce full validation
+                if (xeroxDebounceTimer) clearTimeout(xeroxDebounceTimer);
+                xeroxDebounceTimer = setTimeout(function() {
+                    var result = validateColorPageRange(rawVal, 'xerox');
+                    if (!rawVal.trim()) {
+                        showColorPageRangeError('xerox', '');
+                    } else if (!result.valid) {
+                        showColorPageRangeError('xerox', result.errors[0]);
+                    } else {
+                        showColorPageRangeError('xerox', '');
+                    }
+                }, 400);
+            });
+
+            // Immediate validation on blur
+            xeroxColorPageInput.addEventListener('blur', function() {
+                if (xeroxDebounceTimer) {
+                    clearTimeout(xeroxDebounceTimer);
+                    xeroxDebounceTimer = null;
+                }
+                var rawVal = xeroxColorPageInput.value;
+                if (!rawVal.trim()) {
+                    showColorPageRangeError('xerox', '');
+                    xeroxColorPageSelection = '';
+                    xeroxParsedColorPages = new Set();
+                    return;
+                }
+                var result = validateColorPageRange(rawVal, 'xerox');
+                if (!result.valid) {
+                    showColorPageRangeError('xerox', result.errors[0]);
+                } else {
+                    showColorPageRangeError('xerox', '');
+                }
+            });
+        }
+
+        console.log('COLOR PAGES: setupColorPageRange() initialized (Phase 1 — UI only)');
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // END COLOR PAGE RANGE — Phase 1
+    // ════════════════════════════════════════════════════════════════════════
 });

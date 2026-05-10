@@ -262,6 +262,14 @@
                     </select>
                 </div>
 
+                <!-- Color Page Range (shown only when Color Mode = Color) -->
+                <div class="form-group color-page-range-group" id="xeroxColorPageRangeGroup" style="display: none;">
+                    <label for="xeroxColorPageRange">Color Page Range: <span title="Specify which pages to print in color. Remaining pages print in B&W." style="cursor: help;">🎨</span></label>
+                    <input type="text" id="xeroxColorPageRange" name="color_page_range" placeholder="e.g. 1-2,5,8-10" autocomplete="off">
+                    <div class="color-page-range-helper">Enter pages to print in color. Others will print in B&W.</div>
+                    <div class="color-page-range-error" id="xeroxColorPageRangeError"></div>
+                </div>
+
                 <div class="form-group">
                     <label for="xeroxLayoutPages">Layout (Pages per Sheet):</label>
                     <select id="xeroxLayoutPages" name="layout_pages">
@@ -373,6 +381,14 @@
                     </select>
                 </div>
 
+                <!-- Color Page Range (shown only when Color Mode = Color) -->
+                <div class="form-group color-page-range-group" id="colorPageRangeGroup" style="display: none;">
+                    <label for="colorPageRange">Color Page Range: <span title="Specify which pages to print in color. Remaining pages print in B&W." style="cursor: help;">🎨</span></label>
+                    <input type="text" id="colorPageRange" name="color_page_range" placeholder="e.g. 1-2,5,8-10" autocomplete="off">
+                    <div class="color-page-range-helper">Enter pages to print in color. Others will print in B&W.</div>
+                    <div class="color-page-range-error" id="colorPageRangeError"></div>
+                </div>
+
                 <div class="form-group">
                     <label for="layoutPages">Layout (Pages per Sheet):</label>
                     <select id="layoutPages" name="layout_pages">
@@ -450,6 +466,7 @@
                     <div class="row"><span>Orientation:</span><span id="previewOrientation">-</span></div>
                     <div class="row"><span>Print Side:</span><span id="previewPrintSide">-</span></div>
                     <div class="row"><span>Color Mode:</span><span id="previewColorMode">-</span></div>
+                    <div class="row" id="previewColorPageRangeRow"><span>Color Page Range:</span><span id="previewColorPageRange">-</span></div>
                     <div class="row"><span>Copies:</span><span id="previewCopies">-</span></div>
                     <div class="row"><span>Page Range:</span><span id="previewPageRange">-</span></div>
                 </div>
